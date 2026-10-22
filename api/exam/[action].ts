@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { sb, sha256, hmac, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server';
-import { normalizeEmail } from '../_lib/pure';
+import { sb, sha256, hmac, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server.js';
+import { normalizeEmail } from '../_lib/pure.js';
 
 const Start = z.object({
   fullName: z.string().trim().min(2).max(120),

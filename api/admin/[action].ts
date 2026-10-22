@@ -2,9 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import ExcelJS from 'exceljs';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { sb, hmac, safeEq, ip, cookie, setCookie, limited, begin, fail } from '../_lib/server';
-import { escapeCell } from '../_lib/pure';
-import { parseRows, parseText } from '../_lib/import';
+import { sb, hmac, safeEq, ip, cookie, setCookie, limited, begin, fail } from '../_lib/server.js';
+import { escapeCell } from '../_lib/pure.js';
+import { parseRows, parseText } from '../_lib/import.js';
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
 

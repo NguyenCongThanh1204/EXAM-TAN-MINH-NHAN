@@ -1,0 +1,8 @@
+node_modules
+dist
+.env*
+!.env.example
+.vercel
+loadtest/codes.json
+
+.vercel

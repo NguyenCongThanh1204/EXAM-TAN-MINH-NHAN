@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { isAllowedOrigin } from './pure.js';
 
 export const sb = createClient(process.env.SUPABASE_URL ?? 'http://localhost', process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'unset', { auth: { persistSession: false } });
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -27,8 +28,14 @@ export function begin(req: VercelRequest, res: VercelResponse, maxBytes = 16_384
   res.setHeader('Cache-Control', 'no-store');
   if (Number(req.headers['content-length'] ?? 0) > maxBytes) { res.status(413).json({ error: 'Yêu cầu quá lớn.' }); return null; }
   if (req.method !== 'GET') {
-    const origin = req.headers.origin;
-    if (!origin || origin !== process.env.APP_ORIGIN) { res.status(403).json({ error: 'Nguồn không hợp lệ.' }); return null; }
+    const first = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value?.split(',')[0]?.trim();
+    const origin = first(req.headers.origin);
+    const host = first(req.headers['x-forwarded-host']) || first(req.headers.host);
+    const protocol = first(req.headers['x-forwarded-proto']) || (process.env.VERCEL ? 'https' : 'http');
+    if (!isAllowedOrigin(origin, process.env.APP_ORIGIN, host, protocol)) {
+      res.status(403).json({ error: 'Nguồn không hợp lệ. Kiểm tra domain đang mở và cấu hình APP_ORIGIN.' });
+      return null;
+    }
   }
   return rid;
 }

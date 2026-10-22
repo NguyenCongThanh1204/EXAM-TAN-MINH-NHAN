@@ -6,7 +6,7 @@ React + Vite + Tailwind (frontend) · Vercel Functions (API) · Supabase Postgre
 1. `npm install`
 2. Tạo project Supabase **dev**; chạy `supabase/migrations/001_init.sql` trong SQL Editor.
 3. `cp .env.example .env.local`, điền giá trị (không bao giờ dùng tiền tố `VITE_` cho bí mật).
-4. `npx vercel dev` (cần `APP_ORIGIN=http://localhost:3000`).
+4. `npx vercel dev` (cần `APP_ORIGIN=http://localhost:3000`). Trên Vercel, đặt `APP_ORIGIN` là origin đầy đủ như `https://ten-mien.vercel.app` (không có path hoặc `#/admin`); có thể dùng danh sách nhiều origin cách nhau bằng dấu phẩy. API cũng chấp nhận origin khớp với host triển khai hiện tại để các deployment URL/alias hoạt động, nhưng vẫn từ chối request từ domain khác.
 
 ## 2. Cấu hình kỳ thi (không hardcode)
 Vào `#/admin`, mục **Cấu hình kỳ thi** để đặt tiêu đề, thời gian bắt đầu/kết thúc (giờ Việt Nam), thời lượng, số câu, ngưỡng đạt, logo, và bật/tắt: mở kỳ thi, yêu cầu mã mời, hiện điểm. Bấm **Lưu cấu hình**. Tắt "Mở kỳ thi" để đóng ngay lập tức.

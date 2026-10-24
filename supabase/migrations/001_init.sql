@@ -3,7 +3,7 @@ create extension if not exists pgcrypto;
 create table exam_settings (
   id int primary key default 1 check (id = 1),
   title text not null default 'Bài thi trực tuyến',
-  logo_url text not null default '/logo.svg',
+  logo_url text not null default '/logo.png',
   opening_at timestamptz not null,
   closing_at timestamptz not null,
   duration_minutes int not null default 30 check (duration_minutes > 0),

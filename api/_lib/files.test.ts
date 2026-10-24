@@ -10,20 +10,20 @@ describe('real files round-trip', () => {
     const buf = await Packer.toBuffer(new Document({ sections: [{ children: lines.map((t) => new Paragraph(t)) }] }));
     const r = parseText((await mammoth.extractRawText({ buffer: buf })).value);
     expect(r.errors).toEqual([]);
-    expect(r.items.map((i) => i.correct)).toEqual(['a', 'b']);
+    expect(r.items.map((i) => i.correct)).toEqual([['a'], ['b']]);
     expect(r.items[0].text).toBe('Thủ đô của Việt Nam là?');
   });
   it('xlsx → exceljs → parseRows', async () => {
     const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('S');
-    ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng']);
-    ws.addRow(['=2+2 là?', '3', '4', '', '', '', '', 'B']);
+    ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng', 'Loại', 'Điểm', 'Đáp án tham khảo']);
+    ws.addRow(['=2+2 là?', '3', '4', '', '', '', '', 'B', 'single', 1, '']);
     const loaded = new ExcelJS.Workbook();
     await loaded.xlsx.load((await wb.xlsx.writeBuffer()) as ExcelJS.Buffer);
     const rows: { n: number; cells: string[] }[] = [];
-    loaded.worksheets[0].eachRow({ includeEmpty: false }, (row, n) => rows.push({ n, cells: Array.from({ length: 8 }, (_, i) => String(row.getCell(i + 1).text ?? '').trim()) }));
+    loaded.worksheets[0].eachRow({ includeEmpty: false }, (row, n) => rows.push({ n, cells: Array.from({ length: 11 }, (_, i) => String(row.getCell(i + 1).text ?? '').trim()) }));
     const r = parseRows(rows);
     expect(r.errors).toEqual([]);
     expect(r.items).toHaveLength(1);
-    expect(r.items[0].correct).toBe('b');
+    expect(r.items[0].correct).toEqual(['b']);
   });
 });

@@ -3,10 +3,15 @@ import { remainingMs } from './utils/pure';
 import { api, fmt, type ApiError } from './api';
 
 type Opt = { id: string; text: string };
-type Q = { id: string; text: string; options: Opt[] };
-type Res = { correct: number; incorrect: number; result: 'PASS' | 'FAIL' } | null;
-type Info = { title: string; logoUrl: string; openingAt: string; closingAt: string; durationMinutes: number; questionCount: number; invitationRequired: boolean; active: boolean; serverNow: string };
-type St = { status: string; serverNow: string; deadlineAt?: string; candidate?: { fullName: string; position: string }; questions?: Q[]; answers?: Record<string, string>; result?: Res };
+type Q = { id: string; text: string; type: 'single' | 'multiple' | 'essay'; points: number; options: Opt[] };
+type AnswerValue = { options: string[]; essay: string | null };
+type Res = { correct: number; incorrect: number; scoredPoints: number; totalPoints: number; result: 'PASS' | 'FAIL' } | null;
+type Info = { title: string; logoUrl: string; openingAt: string; closingAt: string; durationMinutes: number; multipleChoiceCount: number; essayCount: number; invitationRequired: boolean; active: boolean; serverNow: string };
+type St = {
+  status: string; serverNow: string; deadlineAt?: string; hasEssay?: boolean; displayMode?: 'paged' | 'all';
+  candidate?: { fullName: string; position: string; level: string; mainProject: string };
+  questions?: Q[]; answers?: Record<string, AnswerValue>; result?: Res;
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function Shell({ info, children }: { info: Info | null; children: React.ReactNode }) {
@@ -24,7 +29,7 @@ function Shell({ info, children }: { info: Info | null; children: React.ReactNod
 }
 
 function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
-  const [f, setF] = useState({ fullName: '', email: '', position: '', code: '' });
+  const [f, setF] = useState({ fullName: '', email: '', position: '', level: '', mainProject: '', code: '' });
   const [fe, setFe] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -39,6 +44,8 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
     if (f.fullName.trim().length < 2) v.fullName = 'Nhập họ và tên.';
     if (!/^\S+@\S+\.\S+$/.test(f.email.trim())) v.email = 'Nhập địa chỉ email hợp lệ.';
     if (f.position.trim().length < 2) v.position = 'Nhập chức danh.';
+    if (!f.level.trim()) v.level = 'Nhập cấp bậc.';
+    if (!f.mainProject.trim()) v.mainProject = 'Nhập công trình chính.';
     if (info.invitationRequired && !f.code.trim()) v.code = 'Nhập mã mời.';
     return v;
   };
@@ -82,16 +89,18 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
         <h2 id="rules" className="mb-3 text-xl font-semibold">Hướng dẫn làm bài</h2>
         <ul className="space-y-2 text-slate-700">
           <li>Kỳ thi mở từ {fmt(info.openingAt)} đến {fmt(info.closingAt)} (giờ Việt Nam).</li>
-          <li>{info.questionCount} câu trắc nghiệm, tối đa {info.durationMinutes} phút kể từ lúc bạn bấm bắt đầu.</li>
+          <li>Tối đa {info.multipleChoiceCount} câu trắc nghiệm và {info.essayCount} câu tự luận ngẫu nhiên, tối đa {info.durationMinutes} phút kể từ lúc bạn bấm bắt đầu. Câu tự luận luôn ở cuối đề.</li>
           <li>Nếu bắt đầu muộn, hạn nộp bài là giờ đóng kỳ thi.</li>
           <li className="font-medium text-slate-900">Nếu bạn chuyển sang tab hoặc cửa sổ khác, bài thi sẽ được nộp tự động ngay lập tức.</li>
-          <li>Khi hết giờ, các câu đã chọn được chấm; câu chưa trả lời tính là sai.</li>
+          <li>Khi hết giờ, các câu đã chọn được chấm; câu chưa trả lời tính là sai. Mỗi câu trắc nghiệm 1 điểm, điểm trắc nghiệm hiển thị ngay sau khi nộp; câu tự luận do giám khảo chấm riêng.</li>
         </ul>
       </section>
       <form onSubmit={go} noValidate className="space-y-4 rounded-lg border border-slate-200 bg-white p-5">
         {field('fullName', 'Họ và tên', 'text', 'name')}
         {field('email', 'Email', 'email', 'email')}
         {field('position', 'Chức danh / vị trí')}
+        {field('level', 'Cấp bậc')}
+        {field('mainProject', 'Công trình chính')}
         {info.invitationRequired && field('code', 'Mã mời')}
         {err && <p role="alert" className="text-sm text-red-700">{err}</p>}
         {waiting && info.active && (
@@ -109,9 +118,9 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
   );
 }
 
-function Exam({ st, onDone }: { st: St; onDone: (r: Res) => void }) {
+function Exam({ st, onDone }: { st: St; onDone: (state: St) => void }) {
   const qs = st.questions!;
-  const [ans, setAns] = useState<Record<string, string>>(st.answers ?? {});
+  const [ans, setAns] = useState<Record<string, AnswerValue>>(st.answers ?? {});
   const [i, setI] = useState(0);
   const offset = useRef(new Date(st.serverNow).getTime() - Date.now());
   const deadline = new Date(st.deadlineAt!).getTime();
@@ -120,6 +129,8 @@ function Exam({ st, onDone }: { st: St; onDone: (r: Res) => void }) {
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState('');
   const chain = useRef<Promise<unknown>>(Promise.resolve()); // saves are sent in order
+  const essayTimers = useRef<Record<string, number>>({});
+  const essayPending = useRef<Record<string, string>>({});
   const sub = useRef(false);
 
   const submit = useCallback(async (reason: 'manual' | 'tab_switch' | 'deadline') => {
@@ -128,10 +139,22 @@ function Exam({ st, onDone }: { st: St; onDone: (r: Res) => void }) {
     setConfirm(false);
     setMsg(reason === 'tab_switch' ? 'Bạn đã rời tab thi hoặc cửa sổ thi mất focus. Bài đang được nộp tự động…' : 'Đang nộp bài…');
     await chain.current.catch(() => undefined);
+    for (const [questionId, essay] of Object.entries(essayPending.current)) {
+      window.clearTimeout(essayTimers.current[questionId]);
+      try {
+        await api('exam/answer', { method: 'PUT', body: JSON.stringify({ questionId, essay }) });
+        delete essayPending.current[questionId];
+        delete essayTimers.current[questionId];
+      } catch {
+        sub.current = false;
+        setMsg('Chưa lưu được bài tự luận do lỗi mạng. Hãy thử nộp lại.');
+        return;
+      }
+    }
     for (let k = 0; k < 4; k++) {
       try {
         const r = await api<St>('exam/submit', { method: 'POST', body: JSON.stringify({ reason }), keepalive: true });
-        return onDone(r.result ?? null);
+        return onDone(r);
       } catch (e) { if ((e as ApiError).status === 401) break; await sleep(800 * (k + 1)); }
     }
     sub.current = false;
@@ -171,25 +194,56 @@ function Exam({ st, onDone }: { st: St; onDone: (r: Res) => void }) {
     };
   }, [deadline, submit]);
 
-  function pick(q: Q, o: Opt) {
+  function save(q: Q, value: AnswerValue) {
     if (sub.current) return;
-    setAns((a) => ({ ...a, [q.id]: o.id }));
+    setAns((a) => ({ ...a, [q.id]: value }));
     setSync('saving');
     chain.current = chain.current.then(async () => {
       for (let k = 0; k < 3; k++) {
-        try { await api('exam/answer', { method: 'PUT', body: JSON.stringify({ questionId: q.id, optionId: o.id }) }); setSync('saved'); return; }
+        try {
+          const body = value.essay !== null
+            ? { questionId: q.id, essay: value.essay }
+            : { questionId: q.id, optionIds: value.options };
+          await api('exam/answer', { method: 'PUT', body: JSON.stringify(body) });
+          setSync('saved'); return;
+        }
         catch (e) { if ((e as ApiError).status === 409) { void submit('deadline'); return; } await sleep(700); }
       }
       setSync('error');
     });
   }
+  const pick = (q: Q, o: Opt) => {
+    const current = ans[q.id]?.options ?? [];
+    const options = q.type === 'multiple'
+      ? current.includes(o.id) ? current.filter((id) => id !== o.id) : [...current, o.id]
+      : [o.id];
+    save(q, { options, essay: null });
+  };
+  const editEssay = (q: Q, essay: string) => {
+    setAns((a) => ({ ...a, [q.id]: { options: [], essay } }));
+    essayPending.current[q.id] = essay;
+    window.clearTimeout(essayTimers.current[q.id]);
+    essayTimers.current[q.id] = window.setTimeout(() => {
+      delete essayPending.current[q.id];
+      delete essayTimers.current[q.id];
+      save(q, { options: [], essay });
+    }, 500);
+  };
   const q = qs[i];
-  const done = Object.keys(ans).length;
+  const all = st.displayMode === 'all';
+  const goTo = (n: number) => {
+    setI(n);
+    if (all) document.getElementById('q-' + qs[n].id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const done = Object.values(ans).filter((a) => a.essay !== null ? !!a.essay.trim() : a.options.length > 0).length;
   const mm = String(Math.floor(left / 60000)).padStart(2, '0'), ss = String(Math.floor((left % 60000) / 1000)).padStart(2, '0');
   return (
     <div className="select-none">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
-        <div className="text-sm"><span className="font-medium">{st.candidate?.fullName}</span> · {st.candidate?.position}</div>
+        <div className="text-sm">
+          <span className="font-medium">{st.candidate?.fullName}</span> · {st.candidate?.position}
+          {' · '}{st.candidate?.level}{' · '}{st.candidate?.mainProject}
+        </div>
         <div className="flex items-center gap-4">
           <span className={'text-sm ' + (sync === 'error' ? 'text-red-700' : 'text-slate-600')} role="status">
             {sync === 'saved' ? 'Đã lưu' : sync === 'saving' ? 'Đang lưu…' : 'Lỗi lưu, đang thử lại'}
@@ -201,32 +255,64 @@ function Exam({ st, onDone }: { st: St; onDone: (r: Res) => void }) {
       <div className="mb-3 h-2 overflow-hidden rounded bg-slate-200" role="progressbar" aria-valuemin={0} aria-valuemax={qs.length} aria-valuenow={done}>
         <div className="h-full bg-teal-700" style={{ width: (done / qs.length) * 100 + '%' }} />
       </div>
-      <p className="mb-4 text-sm text-slate-600">Câu {i + 1} / {qs.length} · Đã trả lời {done}</p>
+      <p className="mb-4 text-sm text-slate-600">{all ? `Tổng ${qs.length} câu` : `Câu ${i + 1} / ${qs.length}`} · Đã trả lời {done}</p>
       <div className="grid gap-4 md:grid-cols-[1fr_220px]">
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
-          <h2 className="mb-4 text-lg font-medium">{q.text}</h2>
-          <fieldset className="space-y-2">
-            <legend className="sr-only">Chọn một đáp án</legend>
-            {q.options.map((o) => (
-              <label key={o.id} className={'flex cursor-pointer items-start gap-3 rounded-md border px-3 py-3 ' + (ans[q.id] === o.id ? 'border-teal-700 bg-teal-50' : 'border-slate-300')}>
-                <input type="radio" name={q.id} checked={ans[q.id] === o.id} onChange={() => pick(q, o)} className="mt-1" />
-                <span>{o.text}</span>
-              </label>
-            ))}
-          </fieldset>
-          <div className="mt-5 flex justify-between">
+        <div className="min-w-0 space-y-4">
+        {(all ? qs : [q]).map((q, n) => (
+        <section key={q.id} id={'q-' + q.id} className="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-5">
+          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-teal-700">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : '1 điểm'})</span></h2>
+          {q.type === 'essay' ? (
+            <label className="block">
+              <span className="sr-only">Câu trả lời tự luận</span>
+              <textarea rows={8} maxLength={10000} value={ans[q.id]?.essay ?? ''}
+                onChange={(e) => editEssay(q, e.target.value)}
+                onBlur={() => {
+                  if (q.id in essayPending.current) {
+                    window.clearTimeout(essayTimers.current[q.id]);
+                    delete essayTimers.current[q.id];
+                    const essay = essayPending.current[q.id];
+                    delete essayPending.current[q.id];
+                    save(q, { options: [], essay });
+                  }
+                }}
+                className="w-full rounded-md border border-slate-300 p-3" placeholder="Nhập câu trả lời..." />
+            </label>
+          ) : (
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-sm text-slate-600">
+                {q.type === 'multiple' ? 'Chọn tất cả đáp án phù hợp.' : 'Chọn một đáp án.'}
+              </legend>
+              {q.options.map((o) => {
+                const checked = ans[q.id]?.options?.includes(o.id) ?? false;
+                return (
+                  <label key={o.id} className={'flex cursor-pointer items-start gap-3 rounded-md border px-3 py-3 ' + (checked ? 'border-teal-700 bg-teal-50' : 'border-slate-300')}>
+                    <input type={q.type === 'multiple' ? 'checkbox' : 'radio'} name={q.id} checked={checked} onChange={() => pick(q, o)} className="mt-1" />
+                    <span>{o.text}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          {!all && <div className="mt-5 flex justify-between">
             <button disabled={i === 0} onClick={() => setI(i - 1)} className="rounded-md border border-slate-300 px-4 py-2 disabled:opacity-40">Câu trước</button>
             {i < qs.length - 1
               ? <button onClick={() => setI(i + 1)} className="rounded-md bg-slate-800 px-4 py-2 text-white">Câu sau</button>
               : <button onClick={() => setConfirm(true)} className="rounded-md bg-teal-700 px-4 py-2 font-semibold text-white">Nộp bài</button>}
-          </div>
+          </div>}
         </section>
-        <nav aria-label="Danh sách câu hỏi" className="rounded-lg border border-slate-200 bg-white p-3">
+        ))}
+        {all && <div className="flex justify-end"><button onClick={() => setConfirm(true)} className="rounded-md bg-teal-700 px-6 py-3 font-semibold text-white">Nộp bài</button></div>}
+        </div>
+        <nav aria-label="Danh sách câu hỏi" className="self-start rounded-lg border border-slate-200 bg-white p-3 md:sticky md:top-4">
           <div className="grid grid-cols-5 gap-1.5">
-            {qs.map((x, n) => (
-              <button key={x.id} onClick={() => setI(n)} aria-label={`Câu ${n + 1}${ans[x.id] ? ', đã trả lời' : ', chưa trả lời'}`} aria-current={n === i}
-                className={'rounded py-1.5 text-sm ' + (n === i ? 'ring-2 ring-slate-900 ' : '') + (ans[x.id] ? 'bg-teal-700 text-white' : 'bg-slate-100')}>{n + 1}</button>
-            ))}
+            {qs.map((x, n) => {
+              const answer = ans[x.id];
+              const answered = answer && (answer.essay !== null ? !!answer.essay.trim() : answer.options.length > 0);
+              return (
+                <button key={x.id} onClick={() => goTo(n)} aria-label={`Câu ${n + 1}${answered ? ', đã trả lời' : ', chưa trả lời'}`} aria-current={n === i}
+                  className={'rounded py-1.5 text-sm ' + (n === i ? 'ring-2 ring-slate-900 ' : '') + (answered ? 'bg-teal-700 text-white' : 'bg-slate-100')}>{n + 1}</button>
+              );
+            })}
           </div>
           <button onClick={() => setConfirm(true)} className="mt-3 w-full rounded-md bg-teal-700 px-3 py-2 font-semibold text-white">Nộp bài</button>
         </nav>
@@ -283,16 +369,19 @@ export default function App() {
       {phase === 'loading' && <p role="status">Đang tải…</p>}
       {phase === 'error' && <p role="alert" className="text-red-700">Không kết nối được máy chủ. <button className="underline" onClick={() => void load()}>Thử lại</button></p>}
       {phase === 'entry' && info && <Entry info={info} onStarted={() => void load()} />}
-      {phase === 'exam' && st && <Exam st={st} onDone={(r) => { setRes(r); setPhase('done'); }} />}
+      {phase === 'exam' && st && <Exam st={st} onDone={(state) => { setSt(state); setRes(state.result ?? null); setPhase('done'); }} />}
       {phase === 'done' && (
         <section className="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center">
           <h2 className="text-xl font-semibold">Bài thi đã được nộp</h2>
           {res ? (
             <>
-              <p className={'mt-4 text-3xl font-bold ' + (res.result === 'PASS' ? 'text-teal-700' : 'text-red-700')}>{res.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}</p>
-              <p className="mt-2 text-slate-700">Đúng {res.correct} câu · Sai {res.incorrect} câu</p>
+              <p className="mt-4 text-sm font-medium uppercase tracking-wide text-slate-500">Kết quả phần trắc nghiệm</p>
+              <p className={'mt-1 text-3xl font-bold ' + (res.result === 'PASS' ? 'text-teal-700' : 'text-red-700')}>{res.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-800">{res.scoredPoints} / {res.totalPoints} điểm</p>
+              <p className="mt-1 text-slate-600">Đúng {res.correct} câu, sai hoặc bỏ trống {res.incorrect} câu.</p>
             </>
-          ) : <p className="mt-3 text-slate-700">Kết quả sẽ được ban tổ chức thông báo.</p>}
+          ) : <p className="mt-3 text-slate-700">Phần trắc nghiệm đã được ghi nhận. Ban tổ chức sẽ thông báo kết quả.</p>}
+          {st?.hasEssay && <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">Phần tự luận sẽ do giám khảo chấm riêng và không nằm trong điểm trắc nghiệm ở trên.</p>}
           {resetError && <p role="alert" className="mt-4 text-sm text-red-700">{resetError}</p>}
           <button disabled={resetBusy} onClick={() => void returnHome()}
             className="mt-6 rounded-md bg-slate-800 px-4 py-2 font-semibold text-white disabled:opacity-60">

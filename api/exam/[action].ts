@@ -7,13 +7,21 @@ const Start = z.object({
   fullName: z.string().trim().min(2).max(120),
   email: z.string().trim().email().max(254),
   position: z.string().trim().min(2).max(120),
+  level: z.string().trim().min(1).max(120),
+  mainProject: z.string().trim().min(1).max(200),
   code: z.string().trim().max(32).optional(),
 });
-const Answer = z.object({ questionId: z.string().uuid(), optionId: z.string().min(1).max(32) });
+const Answer = z.object({
+  questionId: z.string().uuid(),
+  optionIds: z.array(z.string().min(1).max(32)).max(6).optional(),
+  essay: z.string().max(10000).optional(),
+}).refine((v) => (v.optionIds !== undefined) !== (v.essay !== undefined));
 const Submit = z.object({ reason: z.enum(['manual', 'tab_switch', 'deadline']) });
 const ERR: Record<string, [number, string]> = {
   not_open: [403, 'Kỳ thi chưa mở.'], closed: [403, 'Kỳ thi đã đóng.'],
-  bad_code: [403, 'Mã mời không hợp lệ, đã hết lượt sử dụng hoặc đã bị thu hồi.'], not_ready: [503, 'Kỳ thi chưa sẵn sàng.'],
+  bad_code: [403, 'Mã mời không hợp lệ, đã hết lượt sử dụng hoặc đã bị thu hồi.'],
+  no_questions: [503, 'Chưa có câu hỏi nào đang hoạt động. Vui lòng báo quản trị viên kiểm tra ngân hàng câu hỏi.'],
+  not_ready: [503, 'Cơ sở dữ liệu chưa áp dụng migration 005 cho cách chọn số câu mới. Vui lòng báo quản trị viên cập nhật.'],
 };
 
 async function attemptId(req: VercelRequest): Promise<string | null> {
@@ -34,7 +42,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: s, error } = await sb.from('exam_settings').select('*').eq('id', 1).single();
       if (error) throw error;
       return res.json({ title: s.title, logoUrl: s.logo_url, openingAt: s.opening_at, closingAt: s.closing_at,
-        durationMinutes: s.duration_minutes, questionCount: s.question_count, invitationRequired: s.invitation_required,
+        durationMinutes: s.duration_minutes, multipleChoiceCount: s.mc_question_count, essayCount: s.essay_question_count,
+        invitationRequired: s.invitation_required,
         active: s.active, serverNow: new Date().toISOString() });
     }
 
@@ -52,6 +61,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const token = newToken();
       const { error } = await sb.rpc('start_attempt', {
         p_name: p.data.fullName, p_email: normalizeEmail(p.data.email), p_position: p.data.position,
+        p_level: p.data.level, p_main_project: p.data.mainProject,
         p_token_hash: sha256(token), p_code_hash: code ? hmac(process.env.CODE_PEPPER!, code) : '',
       });
       if (error) {
@@ -69,6 +79,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'state' && req.method === 'GET') {
       const { data, error } = await sb.rpc('attempt_state', { p_attempt: id });
       if (error) throw error;
+      if (data?.status === 'in_progress') {
+        const { data: s } = await sb.from('exam_settings').select('display_mode').eq('id', 1).single();
+        return res.json({ ...data, displayMode: s?.display_mode === 'all' ? 'all' : 'paged' });
+      }
       return res.json(data);
     }
 
@@ -76,7 +90,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (await limited('ans:' + id, 120, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu.' });
       const p = Answer.safeParse(req.body);
       if (!p.success) return res.status(400).json({ error: 'Dữ liệu không hợp lệ.' });
-      const { data, error } = await sb.rpc('save_answer', { p_attempt: id, p_question: p.data.questionId, p_option: p.data.optionId });
+      const { data, error } = await sb.rpc('save_answer', {
+        p_attempt: id, p_question: p.data.questionId,
+        p_options: p.data.optionIds ?? [], p_essay: p.data.essay ?? null,
+      });
       if (error) throw error;
       if (data === 'ok') return res.json({ ok: true });
       if (data === 'invalid') return res.status(400).json({ error: 'Câu hỏi hoặc đáp án không hợp lệ.' });

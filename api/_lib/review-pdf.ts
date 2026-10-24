@@ -26,6 +26,12 @@ export function fontSubsetForCharacter(character: string): FontSubset {
   return codePoint <= 0xff ? 'latin' : 'latin-ext';
 }
 
+export function hasExactCorrectOptions(selected: string[], correct: string[]): boolean {
+  return correct.length > 0
+    && selected.length === correct.length
+    && selected.every((id) => correct.includes(id));
+}
+
 const safeFilenamePart = (value: string, fallback: string) => {
   const slug = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[đĐ]/g, (letter) => letter === 'Đ' ? 'D' : 'd')
@@ -34,7 +40,7 @@ const safeFilenamePart = (value: string, fallback: string) => {
 };
 
 export const reviewPdfName = (attempt: ExportAttempt, index: number) =>
-  `${safeFilenamePart(attempt.full_name, 'ThiSinh')}_${safeFilenamePart(attempt.main_project, 'CongTrinhChinh')}_${String(index + 1).padStart(4, '0')}.pdf`;
+  `${String(index + 1).padStart(4, '0')}_${safeFilenamePart(attempt.full_name, 'ThiSinh')}_${safeFilenamePart(attempt.main_project, 'CongTrinhChinh')}.pdf`;
 
 const runFontName = (run: FontRun, bold: boolean) => `Tinos-${run.font}${bold ? '-Bold' : ''}`;
 
@@ -176,6 +182,12 @@ export function buildReviewPdf(input: {
           const isCorrect = correct.includes(option.id);
           doc.fontSize(13).fillColor(isSelected ? (isCorrect ? '#047857' : '#b91c1c') : '#0f172a');
           writeText(doc, `${option.id.toUpperCase()}. ${option.text}`, { indent: 12 }, isSelected);
+        }
+        if (!hasExactCorrectOptions(selected, correct)) {
+          doc.fontSize(13).fillColor('#334155');
+          writeText(doc, 'Đáp án đúng: ', { indent: 12, continued: true }, true);
+          doc.fillColor('#047857');
+          writeText(doc, correct.length ? correct.map((id) => id.toUpperCase()).join(', ') : 'Chưa thiết lập');
         }
       }
       doc.moveDown(0.8);

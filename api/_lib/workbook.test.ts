@@ -42,6 +42,6 @@ describe('buildResultsWorkbook', () => {
 
     const review = loaded.getWorksheet('Hồ sơ phúc khảo')!;
     expect(review.rowCount).toBe(2);
-    expect((review.getRow(2).getCell(13).value as { hyperlink: string }).hyperlink).toBe('pdfs/Nguyen_A_CT1_0001.pdf');
+    expect((review.getRow(2).getCell(13).value as { hyperlink: string }).hyperlink).toBe('pdfs/0001_Nguyen_A_CT1.pdf');
   });
 });

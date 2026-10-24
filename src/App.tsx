@@ -89,9 +89,9 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
         <h2 id="rules" className="mb-3 text-xl font-semibold">Hướng dẫn làm bài</h2>
         <ul className="space-y-2 text-slate-700">
           <li>Kỳ thi mở từ {fmt(info.openingAt)} đến {fmt(info.closingAt)} (giờ Việt Nam).</li>
-          <li>Tối đa {info.multipleChoiceCount} câu trắc nghiệm và {info.essayCount} câu tự luận ngẫu nhiên, tối đa {info.durationMinutes} phút kể từ lúc bạn bấm bắt đầu. Câu tự luận luôn ở cuối đề.</li>
+          <li>Tối đa {info.multipleChoiceCount} câu trắc nghiệm và {info.essayCount} câu tự luận ngẫu nhiên, tối đa {info.durationMinutes} phút kể từ lúc bạn bấm bắt đầu.</li>
           <li>Nếu bắt đầu muộn, hạn nộp bài là giờ đóng kỳ thi.</li>
-          <li className="font-medium text-slate-900">Nếu bạn chuyển sang tab hoặc cửa sổ khác, bài thi sẽ được nộp tự động ngay lập tức.</li>
+          <li className="font-medium text-red-600 ">Nếu bạn chuyển sang tab hoặc cửa sổ khác, bài thi sẽ được nộp tự động ngay lập tức.</li>
           <li>Khi hết giờ, các câu đã chọn được chấm; câu chưa trả lời tính là sai. Mỗi câu trắc nghiệm 1 điểm, điểm trắc nghiệm hiển thị ngay sau khi nộp; câu tự luận do giám khảo chấm riêng.</li>
         </ul>
       </section>

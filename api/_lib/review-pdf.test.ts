@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewPdf, fontSubsetForCharacter, reviewPdfName } from './review-pdf.js';
+import { buildReviewPdf, fontSubsetForCharacter, hasExactCorrectOptions, reviewPdfName } from './review-pdf.js';
 
 describe('buildReviewPdf', () => {
   it('selects all Tinos subsets needed for Vietnamese text', () => {
@@ -11,13 +11,21 @@ describe('buildReviewPdf', () => {
     expect(fontSubsetForCharacter('á')).toBe('latin');
   });
 
+  it('requires the complete correct option set', () => {
+    expect(hasExactCorrectOptions(['a', 'b'], ['b', 'a'])).toBe(true);
+    expect(hasExactCorrectOptions(['a'], ['a', 'b'])).toBe(false);
+    expect(hasExactCorrectOptions(['a', 'c'], ['a', 'b'])).toBe(false);
+    expect(hasExactCorrectOptions([], ['a'])).toBe(false);
+    expect(hasExactCorrectOptions([], [])).toBe(false);
+  });
+
   it('names PDFs with candidate and main project', () => {
     expect(reviewPdfName({
       id: 'attempt-1', full_name: 'Nguyễn Văn A', normalized_email: 'a@example.com', position: 'Kỹ sư',
       candidate_level: 'Cấp 1', main_project: 'Công trình chính', question_order: [],
       correct_count: 0, incorrect_count: 0, scored_points: 0, total_points: 0, result: null,
       started_at: '2026-01-01T01:00:00Z', submitted_at: '2026-01-01T01:30:00Z',
-    }, 0)).toBe('Nguyen_Van_A_Cong_trinh_chinh_0001.pdf');
+    }, 0)).toBe('0001_Nguyen_Van_A_Cong_trinh_chinh.pdf');
   });
 
   it('creates a Vietnamese appeal PDF with the candidate submission', async () => {

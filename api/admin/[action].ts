@@ -135,7 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const attempts: any[] = [];
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await sb.from('exam_attempts')
-          .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,correct_count,incorrect_count,scored_points,total_points,result,started_at,submitted_at')
+          .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,correct_count,incorrect_count,scored_points,total_points,result,started_at,submitted_at,submit_reason')
           .neq('status', 'in_progress').order('submitted_at').order('id')
           .range(offset, offset + pageSize - 1);
         if (error) throw error;

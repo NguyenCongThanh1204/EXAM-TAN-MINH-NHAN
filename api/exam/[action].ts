@@ -1,11 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
 import { sb, sha256, hmac, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server.js';
-import { normalizeEmail } from '../_lib/pure.js';
+import { isCompanyEmail, normalizeEmail } from '../_lib/pure.js';
+import { buildCandidatePdf, candidatePdfName } from '../_lib/review-pdf.js';
 
 const Start = z.object({
   fullName: z.string().trim().min(2).max(120),
-  email: z.string().trim().email().max(254),
+  email: z.string().trim().email().max(254)
+    .refine(isCompanyEmail, 'Email phải có đuôi @tanminhnhan.com.vn.'),
   position: z.string().trim().min(2).max(120),
   level: z.string().trim().min(1).max(120),
   mainProject: z.string().trim().min(1).max(200),
@@ -75,6 +77,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const id = await attemptId(req);
     if (!id) return res.status(401).json({ error: 'Phiên thi không hợp lệ.' });
+
+    if (action === 'export' && req.method === 'GET') {
+      if (await limited('candidate-export:' + id, 10, 60))
+        return res.status(429).json({ error: 'Bạn tải bài làm quá nhiều lần. Vui lòng thử lại sau.' });
+      const { data: attempt, error: attemptError } = await sb.from('exam_attempts')
+        .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,started_at,submitted_at,status,submit_reason')
+        .eq('id', id).single();
+      if (attemptError) throw attemptError;
+      if (attempt.status === 'in_progress' || !attempt.submitted_at)
+        return res.status(409).json({ error: 'Bạn chỉ có thể tải bài làm sau khi đã nộp bài.' });
+
+      const { data: questions, error: questionsError } = await sb.from('exam_questions')
+        .select('id,question_text,options,question_type')
+        .in('id', attempt.question_order);
+      if (questionsError) throw questionsError;
+      const { data: answers, error: answersError } = await sb.from('exam_answers')
+        .select('question_id,selected_options,essay_response')
+        .eq('attempt_id', id);
+      if (answersError) throw answersError;
+
+      const pdf = await buildCandidatePdf({ attempt, questions, answers });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${candidatePdfName(attempt)}"`);
+      return res.status(200).send(pdf);
+    }
 
     if (action === 'state' && req.method === 'GET') {
       const { data, error } = await sb.rpc('attempt_state', { p_attempt: id });

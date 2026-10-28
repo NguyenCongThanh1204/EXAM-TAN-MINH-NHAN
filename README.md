@@ -28,7 +28,7 @@ Trong mục "Nhập câu hỏi từ tệp": chọn **Excel** hoặc **Word**, ch
 - Việc nhập bị **khoá khi đã có bất kỳ bài thi nào** (kể cả thi thử): xoá thi thử bằng `delete from exam_attempts;` rồi nhập lại.
 - Chỉ lưu khi toàn bộ tệp hợp lệ; việc lưu là một giao dịch DB duy nhất.
 
-Người dự thi bắt buộc nhập họ tên, email, chức danh/vị trí, cấp bậc và công trình chính. Trắc nghiệm được chấm và hiện điểm ngay khi nộp bài. Câu tự luận được chấm bên ngoài ứng dụng: tải ZIP kết quả, mở workbook Excel, xem bài làm và đáp án tham khảo trong sheet **Kết quả tự luận**, rồi nhập điểm vào cột **Điểm giám khảo chấm** (0 đến điểm tối đa); ứng dụng không lưu điểm tự chấm.
+Người dự thi bắt buộc nhập họ tên, email công ty có đuôi `@tanminhnhan.com.vn`, chức danh/vị trí, cấp bậc và công trình chính; giao diện và API đều kiểm tra miền email này. Trắc nghiệm được chấm và hiện điểm ngay khi nộp bài. Sau khi nộp, thí sinh có thể tải PDF bài làm của mình, gồm nội dung câu hỏi và lựa chọn/bài làm đã nộp, không kèm đáp án chuẩn. Tất cả PDF bài làm/hồ sơ có logo công ty ở góc trên trái; nếu bài bị nộp tự động do chuyển tab, PDF ghi rõ vi phạm ở góc trên phải. Câu tự luận được chấm bên ngoài ứng dụng: tải ZIP kết quả, mở workbook Excel, xem bài làm và đáp án tham khảo trong sheet **Kết quả tự luận**, rồi nhập điểm vào cột **Điểm giám khảo chấm** (0 đến điểm tối đa); ứng dụng không lưu điểm tự chấm.
 
 ## 4. Mã mời (mã dùng chung)
 Mở `https://<app>/#/admin`, mục **Mã mời dùng chung**: nhập **số người được dùng mã** (ví dụ 300) rồi bấm "Tạo mã mới". Hệ thống tạo **một mã duy nhất** cho tối đa 300 lượt thi; mỗi thí sinh vào thi thành công tốn một lượt. Mã chỉ hiển thị một lần; DB chỉ lưu HMAC. Panel hiển thị số lượt đã dùng / giới hạn.

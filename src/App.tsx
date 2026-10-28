@@ -43,6 +43,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
     const v: Record<string, string> = {};
     if (f.fullName.trim().length < 2) v.fullName = 'Nhập họ và tên.';
     if (!/^\S+@\S+\.\S+$/.test(f.email.trim())) v.email = 'Nhập địa chỉ email hợp lệ.';
+    else if (!/^[^\s@]+@tanminhnhan\.com\.vn$/i.test(f.email.trim())) v.email = 'Email phải có đuôi @tanminhnhan.com.vn.';
     if (f.position.trim().length < 2) v.position = 'Nhập chức danh.';
     if (!f.level.trim()) v.level = 'Nhập cấp bậc.';
     if (!f.mainProject.trim()) v.mainProject = 'Nhập công trình chính.';
@@ -97,7 +98,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
       </section>
       <form onSubmit={go} noValidate className="space-y-4 rounded-lg border border-slate-200 bg-white p-5">
         {field('fullName', 'Họ và tên', 'text', 'name')}
-        {field('email', 'Email', 'email', 'email')}
+        {field('email', 'Email công ty (@tanminhnhan.com.vn)', 'email', 'email')}
         {field('position', 'Chức danh / vị trí')}
         {field('level', 'Cấp bậc')}
         {field('mainProject', 'Công trình chính')}
@@ -118,7 +119,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
   );
 }
 
-function Exam({ st, onDone }: { st: St; onDone: (state: St) => void }) {
+function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) => void }) {
   const qs = st.questions!;
   const [ans, setAns] = useState<Record<string, AnswerValue>>(st.answers ?? {});
   const [i, setI] = useState(0);
@@ -137,7 +138,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St) => void }) {
     if (sub.current) return;
     sub.current = true;
     setConfirm(false);
-    setMsg(reason === 'tab_switch' ? 'Bạn đã rời tab thi hoặc cửa sổ thi mất focus. Bài đang được nộp tự động…' : 'Đang nộp bài…');
+    setMsg(reason === 'tab_switch' ? 'Bạn đã chuyển sang tab khác. Bài đang được nộp tự động…' : 'Đang nộp bài…');
     await chain.current.catch(() => undefined);
     for (const [questionId, essay] of Object.entries(essayPending.current)) {
       window.clearTimeout(essayTimers.current[questionId]);
@@ -154,7 +155,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St) => void }) {
     for (let k = 0; k < 4; k++) {
       try {
         const r = await api<St>('exam/submit', { method: 'POST', body: JSON.stringify({ reason }), keepalive: true });
-        return onDone(r);
+        return onDone(r, reason === 'tab_switch');
       } catch (e) { if ((e as ApiError).status === 401) break; await sleep(800 * (k + 1)); }
     }
     sub.current = false;
@@ -252,6 +253,17 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St) => void }) {
         </div>
       </div>
       {msg && <p role="alert" className="mb-4 rounded-md bg-amber-100 px-4 py-3 text-amber-900">{msg}</p>}
+      {msg.startsWith('Bạn đã chuyển sang tab khác.') && (
+        <div role="alertdialog" aria-modal="true" aria-labelledby="tab-submit-notice"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-md rounded-xl border-2 border-red-300 bg-white p-6 text-center shadow-2xl">
+            <p className="mx-auto w-fit rounded-full bg-red-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-red-800">Vi phạm quy định thi</p>
+            <h2 id="tab-submit-notice" className="mt-3 text-lg font-bold text-red-800">Bài thi đang được nộp tự động</h2>
+            <p className="mt-2 text-red-800">{msg}</p>
+            <p className="mt-2 text-sm text-slate-600">Vui lòng đợi trong giây lát.</p>
+          </div>
+        </div>
+      )}
       <div className="mb-3 h-2 overflow-hidden rounded bg-slate-200" role="progressbar" aria-valuemin={0} aria-valuemax={qs.length} aria-valuenow={done}>
         <div className="h-full bg-teal-700" style={{ width: (done / qs.length) * 100 + '%' }} />
       </div>
@@ -339,6 +351,9 @@ export default function App() {
   const [res, setRes] = useState<Res>(null);
   const [resetError, setResetError] = useState('');
   const [resetBusy, setResetBusy] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
+  const [tabSwitchNotice, setTabSwitchNotice] = useState(false);
   const [phase, setPhase] = useState<'loading' | 'entry' | 'exam' | 'done' | 'error'>('loading');
   const load = useCallback(async () => {
     try {
@@ -357,6 +372,7 @@ export default function App() {
       await api('exam/reset', { method: 'POST', body: '{}' });
       setSt(null);
       setRes(null);
+      setTabSwitchNotice(false);
       setPhase('entry');
     } catch (e) {
       setResetError((e as Error).message);
@@ -364,14 +380,59 @@ export default function App() {
       setResetBusy(false);
     }
   };
+  const downloadAnswerPdf = async () => {
+    setExportBusy(true);
+    setExportError('');
+    try {
+      const response = await fetch('/api/exam/export', { credentials: 'same-origin' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error || 'Không tải được file bài làm. Vui lòng thử lại.');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const filename = /filename="([^"]+)"/i.exec(disposition)?.[1];
+      anchor.download = filename || 'bai-lam.pdf';
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : 'Không tải được file bài làm. Vui lòng thử lại.');
+    } finally {
+      setExportBusy(false);
+    }
+  };
   return (
     <Shell info={info}>
       {phase === 'loading' && <p role="status">Đang tải…</p>}
       {phase === 'error' && <p role="alert" className="text-red-700">Không kết nối được máy chủ. <button className="underline" onClick={() => void load()}>Thử lại</button></p>}
       {phase === 'entry' && info && <Entry info={info} onStarted={() => void load()} />}
-      {phase === 'exam' && st && <Exam st={st} onDone={(state) => { setSt(state); setRes(state.result ?? null); setPhase('done'); }} />}
+      {phase === 'exam' && st && <Exam st={st} onDone={(state, tabSwitch) => {
+        setSt(state);
+        setRes(state.result ?? null);
+        setTabSwitchNotice(tabSwitch);
+        setPhase('done');
+      }} />}
       {phase === 'done' && (
         <section className="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center">
+          {tabSwitchNotice && (
+            <div role="alertdialog" aria-modal="true" aria-labelledby="tab-submit-notice"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+              <div className="w-full max-w-md rounded-xl border-2 border-red-300 bg-white p-6 text-center shadow-2xl">
+                <p className="mx-auto w-fit rounded-full bg-red-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-red-800">Vi phạm quy định thi</p>
+                <h2 id="tab-submit-notice" className="mt-3 text-lg font-bold text-red-800">Bài thi đã được nộp tự động</h2>
+                <p className="mt-2 text-red-800">Bạn đã chuyển sang tab khác nên hệ thống đã tự động nộp bài.</p>
+                <button autoFocus onClick={() => setTabSwitchNotice(false)}
+                  className="mt-5 rounded-md bg-teal-700 px-5 py-2 font-semibold text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2">
+                  Đã hiểu
+                </button>
+              </div>
+            </div>
+          )}
           <h2 className="text-xl font-semibold">Bài thi đã được nộp</h2>
           {res ? (
             <>
@@ -382,11 +443,19 @@ export default function App() {
             </>
           ) : <p className="mt-3 text-slate-700">Phần trắc nghiệm đã được ghi nhận. Ban tổ chức sẽ thông báo kết quả.</p>}
           {st?.hasEssay && <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">Phần tự luận sẽ do giám khảo chấm riêng và không nằm trong điểm trắc nghiệm ở trên.</p>}
+          <p className="mt-4 text-sm text-slate-600">File PDF chỉ chứa câu hỏi và lựa chọn/bài làm của bạn, không có đáp án chuẩn.</p>
+          {exportError && <p role="alert" className="mt-3 text-sm text-red-700">{exportError}</p>}
           {resetError && <p role="alert" className="mt-4 text-sm text-red-700">{resetError}</p>}
-          <button disabled={resetBusy} onClick={() => void returnHome()}
-            className="mt-6 rounded-md bg-slate-800 px-4 py-2 font-semibold text-white disabled:opacity-60">
-            {resetBusy ? 'Đang quay lại…' : 'Quay lại trang chủ'}
-          </button>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <button disabled={exportBusy} onClick={() => void downloadAnswerPdf()}
+              className="min-h-12 w-full rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              {exportBusy ? 'Đang xuất file…' : 'Tải bài làm (PDF)'}
+            </button>
+            <button disabled={resetBusy} onClick={() => void returnHome()}
+              className="min-h-12 w-full rounded-md bg-slate-800 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              {resetBusy ? 'Đang quay lại…' : 'Quay lại trang chủ'}
+            </button>
+          </div>
         </section>
       )}
     </Shell>

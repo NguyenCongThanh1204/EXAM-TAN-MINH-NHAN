@@ -9,7 +9,7 @@ export type ExportAttempt = {
   candidate_level: string; main_project: string; question_order: string[];
   correct_count: number | null; incorrect_count: number | null;
   scored_points: number | null; total_points: number | null; result: string | null;
-  started_at: string; submitted_at: string | null;
+  started_at: string; submitted_at: string | null; submit_reason?: string | null;
 };
 export type ExportQuestion = {
   id: string; question_text: string; options: Option[] | null;

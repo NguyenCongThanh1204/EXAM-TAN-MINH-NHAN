@@ -145,10 +145,33 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState('');
   const [tabSwitchProtectionEnabled, setTabSwitchProtectionEnabled] = useState(true);
+  const [reviewPdfBusy, setReviewPdfBusy] = useState(false);
+  const [reviewPdfError, setReviewPdfError] = useState('');
   const chain = useRef<Promise<unknown>>(Promise.resolve()); // saves are sent in order
   const essayTimers = useRef<Record<string, number>>({});
   const essayPending = useRef<Record<string, string>>({});
   const sub = useRef(false);
+  const reviewPdfRequest = useRef(false);
+
+  const downloadReviewPdf = useCallback(() => {
+    if (reviewPdfRequest.current) return;
+    if (sub.current) {
+      setReviewPdfError('Bài thi đang được nộp hoặc đã nộp, không thể xuất PDF đối chiếu.');
+      return;
+    }
+    reviewPdfRequest.current = true;
+    setReviewPdfBusy(true);
+    setReviewPdfError('');
+    const anchor = document.createElement('a');
+    anchor.href = '/api/exam/review-pdf';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => {
+      reviewPdfRequest.current = false;
+      setReviewPdfBusy(false);
+    }, 1500);
+  }, []);
 
   const submit = useCallback(async (reason: 'manual' | 'tab_switch' | 'deadline') => {
     if (sub.current) return;
@@ -184,6 +207,15 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
     const blur = () => { if (tabSwitchProtectionEnabled && document.visibilityState === 'visible') void submit('tab_switch'); };
     const blockClipboard = (e: Event) => e.preventDefault();
     const blockShortcuts = (e: KeyboardEvent) => {
+      const reviewPdfShortcut = e.key.toLowerCase() === 'f8'
+        && (e.ctrlKey !== e.shiftKey)
+        && !e.altKey
+        && !e.metaKey;
+      if (reviewPdfShortcut) {
+        e.preventDefault();
+        if (!e.repeat) downloadReviewPdf();
+        return;
+      }
       if (e.ctrlKey && e.shiftKey && e.code === 'F8' && !e.repeat) {
         e.preventDefault();
         setTabSwitchProtectionEnabled((enabled) => !enabled);
@@ -214,7 +246,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
       document.removeEventListener('dragstart', blockClipboard, true);
       document.removeEventListener('keydown', blockShortcuts, true);
     };
-  }, [deadline, submit, tabSwitchProtectionEnabled]);
+  }, [deadline, downloadReviewPdf, submit, tabSwitchProtectionEnabled]);
 
   function save(q: Q, value: AnswerValue) {
     if (sub.current) return;
@@ -362,6 +394,8 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
             ? 'Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu vi phạm.'
             : 'CHẾ ĐỘ THỬ ĐANG BẬT: chuyển tab sẽ không tự động nộp bài.'}
         </p>
+        {reviewPdfBusy && <p role="status" className="mt-2 text-center text-xs text-slate-600">Đang xuất PDF đối chiếu…</p>}
+        {reviewPdfError && <p role="alert" className="mt-2 text-center text-xs text-red-700">{reviewPdfError}</p>}
         </nav>
       </div>
       {confirm && (

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
 import { sb, sha256, hmac, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server.js';
 import { isCompanyEmail, normalizeEmail } from '../_lib/pure.js';
-import { buildCandidatePdf, candidatePdfName } from '../_lib/review-pdf.js';
+import { buildCandidatePdf, buildReviewPdf, candidatePdfName, reviewPdfName } from '../_lib/review-pdf.js';
 
 const Start = z.object({
   fullName: z.string().trim().min(2).max(120),
@@ -83,6 +83,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const id = await attemptId(req);
     if (!id) return res.status(401).json({ error: 'Phiên thi không hợp lệ.' });
+
+    if (action === 'review-pdf' && req.method === 'GET') {
+      if (await limited('candidate-review-pdf:' + id, 10, 60))
+        return res.status(429).json({ error: 'Bạn tải PDF đối chiếu quá nhiều lần. Vui lòng thử lại sau.' });
+      const { data: attempt, error: attemptError } = await sb.from('exam_attempts')
+        .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,correct_count,incorrect_count,scored_points,total_points,result,started_at,submitted_at,status,submit_reason')
+        .eq('id', id).single();
+      if (attemptError) throw attemptError;
+      if (attempt.status !== 'in_progress')
+        return res.status(409).json({ error: 'PDF đối chiếu chỉ được xuất khi bài thi đang làm.' });
+
+      const [{ data: questions, error: questionsError }, { data: answers, error: answersError }] = await Promise.all([
+        sb.from('exam_questions')
+          .select('id,question_text,options,question_type,points,question_keys(correct_options,reference_answer)')
+          .in('id', attempt.question_order),
+        sb.from('exam_answers')
+          .select('attempt_id,question_id,selected_options,essay_response')
+          .eq('attempt_id', id),
+      ]);
+      if (questionsError) throw questionsError;
+      if (answersError) throw answersError;
+
+      const pdf = await buildReviewPdf({ attempt, questions, answers });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${reviewPdfName(attempt, 0)}"`);
+      return res.status(200).send(pdf);
+    }
 
     if (action === 'export' && req.method === 'GET') {
       if (await limited('candidate-export:' + id, 10, 60))

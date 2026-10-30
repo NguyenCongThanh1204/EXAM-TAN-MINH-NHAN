@@ -69,6 +69,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (!adminOk(req)) return res.status(401).json({ error: 'Chưa xác thực.' });
 
+    if (action === 'projects' && req.method === 'GET') {
+      const { data, error } = await sb.from('exam_projects').select('id,name,active').order('name');
+      if (error) throw error;
+      return res.json({ projects: data });
+    }
+    if (action === 'projects' && req.method === 'POST') {
+      const p = z.object({ name: z.string().trim().min(1).max(200) }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Tên công trình không hợp lệ.' });
+      const { data, error } = await sb.from('exam_projects').insert({ name: p.data.name })
+        .select('id,name,active').single();
+      if (error?.code === '23505') return res.status(409).json({ error: 'Tên công trình này đã có trong danh sách.' });
+      if (error) throw error;
+      return res.status(201).json(data);
+    }
+    if (action === 'projects' && req.method === 'PUT') {
+      const p = z.object({ id: z.string().uuid(), active: z.boolean() }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Cập nhật công trình không hợp lệ.' });
+      if (!p.data.active) {
+        const { count, error: countError } = await sb.from('exam_projects')
+          .select('id', { count: 'exact', head: true }).eq('active', true);
+        if (countError) throw countError;
+        if ((count ?? 0) <= 1) return res.status(409).json({ error: 'Cần giữ ít nhất một công trình đang được chọn.' });
+      }
+      const { data, error } = await sb.from('exam_projects').update({ active: p.data.active })
+        .eq('id', p.data.id).select('id,name,active').maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Không tìm thấy công trình.' });
+      return res.json(data);
+    }
     if (action === 'codes' && req.method === 'GET') {
       const { data, error } = await sb.from('invitation_codes').select('max_uses,uses,created_at')
         .is('revoked_at', null).order('created_at', { ascending: false }).limit(1).maybeSingle();

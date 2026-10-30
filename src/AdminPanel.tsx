@@ -18,6 +18,7 @@ type Settings = {
   displayMode: 'paged' | 'all'; active: boolean;
 };
 type ActiveCode = { limit: number; uses: number; createdAt: string } | null;
+type Project = { id: string; name: string; active: boolean };
 
 const toB64 = (f: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] ?? ''); r.onerror = () => rej(new Error('Không đọc được tệp.')); r.readAsDataURL(f); });
 const inputCls = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20';
@@ -119,6 +120,66 @@ function SettingsForm({ run }: { run: Run }) {
         <button className={btnPrimary} disabled={busy} onClick={save}>{busy ? 'Đang lưu…' : 'Lưu cấu hình'}</button>
       </div>
     </div>
+  );
+}
+
+function Projects({ run }: { run: Run }) {
+  const { toast } = useUi();
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const reload = () => api<{ projects: Project[] }>('admin/projects').then((r) => setProjects(r.projects));
+  useEffect(() => { void reload().catch((e: Error) => toast('error', e.message)); }, [toast]);
+
+  const add = (e: React.FormEvent) => {
+    e.preventDefault();
+    void run(async () => {
+      setBusy(true);
+      try {
+        const project = await api<Project>('admin/projects', { method: 'POST', body: JSON.stringify({ name }) });
+        setProjects((current) => [...(current ?? []), project].sort((a, b) => a.name.localeCompare(b.name, 'vi')));
+        setName('');
+        toast('success', 'Đã thêm công trình vào danh sách.');
+      } finally {
+        setBusy(false);
+      }
+    });
+  };
+
+  const setActive = (project: Project) => void run(async () => {
+    const updated = await api<Project>('admin/projects', {
+      method: 'PUT',
+      body: JSON.stringify({ id: project.id, active: !project.active }),
+    });
+    setProjects((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? []);
+    toast('success', updated.active ? 'Đã mở lựa chọn công trình.' : 'Đã ẩn công trình khỏi lựa chọn; dữ liệu bài thi cũ được giữ nguyên.');
+  });
+
+  return (
+    <Card id="project-catalog" title="Danh sách công trình" desc="Thí sinh chỉ chọn được công trình đang hoạt động. Công trình đã dùng trong bài thi được giữ lại để phục vụ thống kê và hồ sơ cũ.">
+      <form onSubmit={add} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <Field label="Tên công trình mới" className="flex-1">
+          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
+        </Field>
+        <button className={btnPrimary} disabled={busy || !name.trim()}>{busy ? 'Đang thêm…' : 'Thêm công trình'}</button>
+      </form>
+      {projects === null ? <p className="text-sm text-slate-500">Đang tải danh sách…</p>
+        : projects.length === 0 ? <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Chưa có công trình. Hãy thêm danh sách trước khi mở kỳ thi cho thí sinh.</p>
+          : <ul className="divide-y divide-slate-200 rounded-xl border border-slate-200">
+            {projects.map((project) => (
+              <li key={project.id} className="flex items-center justify-between gap-4 px-3 py-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-slate-800">{project.name}</span>
+                  <span className={'text-xs ' + (project.active ? 'text-emerald-700' : 'text-slate-500')}>{project.active ? 'Đang cho phép chọn' : 'Đã ẩn · dữ liệu lịch sử được giữ'}</span>
+                </span>
+                <button type="button" className={project.active ? btnGhost : btnPrimary}
+                  onClick={() => setActive(project)}>
+                  {project.active ? 'Ẩn' : 'Kích hoạt'}
+                </button>
+              </li>
+            ))}
+          </ul>}
+    </Card>
   );
 }
 
@@ -351,7 +412,7 @@ export default function Admin() {
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-4 py-6" role="tabpanel">
-        {tab === 'settings' && <SettingsForm run={run} />}
+        {tab === 'settings' && <div className="space-y-6"><SettingsForm run={run} /><Projects run={run} /></div>}
         {tab === 'codes' && <Codes run={run} />}
         {tab === 'questions' && <Import run={run} />}
         {tab === 'results' && <Results run={run} />}

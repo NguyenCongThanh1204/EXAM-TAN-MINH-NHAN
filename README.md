@@ -4,14 +4,14 @@ React + Vite + Tailwind (frontend) · Vercel Functions (API) · Supabase Postgre
 
 ## 1. Chạy cục bộ
 1. `npm install`
-2. Tạo project Supabase **dev**; chạy `supabase/migrations/001_init.sql` trong SQL Editor.
+2. Tạo project Supabase **dev**; chạy các migration trong `supabase/migrations/` theo thứ tự tên tệp từ `001` đến mới nhất trong SQL Editor.
 3. `cp .env.example .env.local`, điền giá trị (không bao giờ dùng tiền tố `VITE_` cho bí mật).
 4. `npx vercel dev` (cần `APP_ORIGIN=http://localhost:3000`).
 
 Admin và thí sinh dùng chung một website/domain. Trên Vercel, đặt `APP_ORIGIN` thành origin mà thí sinh mở, ví dụ `https://ten-mien.vercel.app` (chỉ giao thức + domain, không có dấu `/` cuối, path hoặc `#/admin`). Trang admin là cùng trang đó với hash `/#/admin`; không cần tạo domain admin riêng. API chấp nhận origin cấu hình hoặc origin khớp chính xác host hiện tại do Vercel chuyển tiếp, và từ chối domain khác. Nếu dùng nhiều domain chính thức, có thể khai báo danh sách origin cách nhau bằng dấu phẩy. Thay đổi biến môi trường Vercel cần redeploy để có hiệu lực.
 
 ## 2. Cấu hình kỳ thi (không hardcode)
-Vào `#/admin` (giao diện chia tab Cấu hình / Mã mời / Câu hỏi / Kết quả), tab **Cấu hình** để đặt tiêu đề, thời gian bắt đầu/kết thúc (giờ Việt Nam), thời lượng, số câu trắc nghiệm và số câu tự luận riêng (mỗi loại có thể đặt 0; tổng phải từ 1 đến 1.000), ngưỡng đạt, **cách hiển thị bài làm** (từng câu một hoặc hiện tất cả câu cùng lúc) và bật/tắt: mở kỳ thi, yêu cầu mã mời, hiện điểm. Logo dùng mặc định `/logo.png`, không cấu hình trong giao diện. Bấm **Lưu cấu hình**. Tắt "Mở kỳ thi" để đóng ngay lập tức. Mọi xác nhận/thông báo dùng hộp thoại và toast của ứng dụng, không dùng hộp thoại mặc định của trình duyệt.
+Vào `#/admin` (giao diện chia tab Cấu hình / Mã mời / Câu hỏi / Kết quả), tab **Cấu hình** để đặt tiêu đề, thời gian bắt đầu/kết thúc (giờ Việt Nam), thời lượng, số câu trắc nghiệm và số câu tự luận riêng (mỗi loại có thể đặt 0; tổng phải từ 1 đến 1.000), ngưỡng đạt, **cách hiển thị bài làm** (từng câu một hoặc hiện tất cả câu cùng lúc) và bật/tắt: mở kỳ thi, yêu cầu mã mời, hiện điểm. Tại **Danh sách công trình**, thêm công trình mới hoặc ẩn/kích hoạt công trình hiện có; công trình đã có bài thi không bị xóa để giữ lịch sử và hỗ trợ thống kê theo công trình/cấp bậc. Logo dùng mặc định `/logo.png`, không cấu hình trong giao diện. Bấm **Lưu cấu hình**. Tắt "Mở kỳ thi" để đóng ngay lập tức. Mọi xác nhận/thông báo dùng hộp thoại và toast của ứng dụng, không dùng hộp thoại mặc định của trình duyệt.
 (Có thể sửa trực tiếp bảng `exam_settings` trong Supabase nếu cần.)
 Thay `public/logo.png` bằng logo công ty nếu cần.
 Hạn nộp = `LEAST(giờ bắt đầu theo server + duration, closing_at)`, tính trong DB (`start_attempt`).
@@ -28,7 +28,7 @@ Trong mục "Nhập câu hỏi từ tệp": chọn **Excel** hoặc **Word**, ch
 - Việc nhập bị **khoá khi đã có bất kỳ bài thi nào** (kể cả thi thử): xoá thi thử bằng `delete from exam_attempts;` rồi nhập lại.
 - Chỉ lưu khi toàn bộ tệp hợp lệ; việc lưu là một giao dịch DB duy nhất.
 
-Người dự thi bắt buộc nhập họ tên, email công ty có đuôi `@tanminhnhan.com.vn`, chức danh/vị trí, cấp bậc và công trình chính; giao diện và API đều kiểm tra miền email này. Trắc nghiệm được chấm và hiện điểm ngay khi nộp bài. Sau khi nộp, thí sinh có thể tải PDF bài làm của mình, gồm nội dung câu hỏi và lựa chọn/bài làm đã nộp, không kèm đáp án chuẩn. Tất cả PDF bài làm/hồ sơ có logo công ty ở góc trên trái; nếu bài bị nộp tự động do chuyển tab, PDF ghi rõ vi phạm ở góc trên phải. Câu tự luận được chấm bên ngoài ứng dụng: tải ZIP kết quả, mở workbook Excel, xem bài làm và đáp án tham khảo trong sheet **Kết quả tự luận**, rồi nhập điểm vào cột **Điểm giám khảo chấm** (0 đến điểm tối đa); ứng dụng không lưu điểm tự chấm.
+Người dự thi bắt buộc nhập họ tên, email công ty có đuôi `@tanminhnhan.com.vn`, chức danh/vị trí, cấp bậc và chọn công trình chính trong danh mục; giao diện và API đều kiểm tra miền email và công trình. Mỗi email chỉ được bắt đầu một lượt thi; hệ thống khóa kiểm tra này trong giao dịch DB để ngăn yêu cầu đồng thời dùng cùng địa chỉ. Trắc nghiệm được chấm và hiện điểm ngay khi nộp bài. Sau khi nộp, thí sinh có thể tải PDF bài làm của mình, gồm nội dung câu hỏi và lựa chọn/bài làm đã nộp, không kèm đáp án chuẩn. Tất cả PDF bài làm/hồ sơ có logo công ty ở góc trên trái; nếu bài bị nộp tự động do chuyển tab, PDF ghi rõ vi phạm ở góc trên phải. Câu tự luận được chấm bên ngoài ứng dụng: tải ZIP kết quả, mở workbook Excel, xem bài làm và đáp án tham khảo trong sheet **Kết quả tự luận**, rồi nhập điểm vào cột **Điểm giám khảo chấm** (0 đến điểm tối đa); ứng dụng không lưu điểm tự chấm.
 
 ## 4. Mã mời (mã dùng chung)
 Mở `https://<app>/#/admin`, mục **Mã mời dùng chung**: nhập **số người được dùng mã** (ví dụ 300) rồi bấm "Tạo mã mới". Hệ thống tạo **một mã duy nhất** cho tối đa 300 lượt thi; mỗi thí sinh vào thi thành công tốn một lượt. Mã chỉ hiển thị một lần; DB chỉ lưu HMAC. Panel hiển thị số lượt đã dùng / giới hạn.
@@ -38,7 +38,7 @@ Nếu tắt mã mời (`invitation_required=false`) thì **không thể chống 
 ## 5. Triển khai (Vercel)
 1. Push lên Git, import vào Vercel (Framework: Vite).
 2. Đặt biến môi trường như `.env.example` (Production ≠ Preview/Dev; dùng project Supabase riêng).
-3. Chạy migration theo thứ tự `001_init.sql` đến `010_default_logo_png.sql` trên Supabase production, nhập câu hỏi, tạo mã, cập nhật cấu hình trong `#/admin`. Nếu database đã có migration 009, chỉ cần chạy `010_default_logo_png.sql` để đặt logo mặc định thành `/logo.png`.
+3. Chạy migration theo thứ tự `001_init.sql` đến `011_project_catalog_and_unique_email.sql` trên Supabase production, nhập câu hỏi, thêm danh sách công trình trong `#/admin` rồi cập nhật cấu hình. Nếu database đã có migration 010, chỉ cần chạy `011_project_catalog_and_unique_email.sql`; migration này tạo danh mục công trình, đưa các công trình đã có trong lượt thi vào danh sách và ngăn email thi lại.
 4. Kiểm tra: vào trang, thi thử bằng 1 mã, đăng nhập `#/admin`, tải ZIP hồ sơ.
 5. Backup: Supabase → Database → Backups, hoặc `pg_dump` trước/sau kỳ thi. Rollback: Vercel → Deployments → Promote bản trước.
 

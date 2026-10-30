@@ -22,6 +22,8 @@ const Submit = z.object({ reason: z.enum(['manual', 'tab_switch', 'deadline']) }
 const ERR: Record<string, [number, string]> = {
   not_open: [403, 'Kỳ thi chưa mở.'], closed: [403, 'Kỳ thi đã đóng.'],
   bad_code: [403, 'Mã mời không hợp lệ, đã hết lượt sử dụng hoặc đã bị thu hồi.'],
+  email_used: [409, 'Email này đã được dùng để thi. Mỗi email chỉ được tham gia một lần.'],
+  invalid_project: [400, 'Công trình đã chọn không hợp lệ hoặc không còn trong danh sách. Hãy tải lại trang và chọn lại.'],
   no_questions: [503, 'Chưa có câu hỏi nào đang hoạt động. Vui lòng báo quản trị viên kiểm tra ngân hàng câu hỏi.'],
   not_ready: [503, 'Cơ sở dữ liệu chưa áp dụng migration 005 cho cách chọn số câu mới. Vui lòng báo quản trị viên cập nhật.'],
 };
@@ -41,11 +43,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const A = ip(req);
 
     if (action === 'info' && req.method === 'GET') {
-      const { data: s, error } = await sb.from('exam_settings').select('*').eq('id', 1).single();
+      const [{ data: s, error }, { data: projects, error: projectsError }] = await Promise.all([
+        sb.from('exam_settings').select('*').eq('id', 1).single(),
+        sb.from('exam_projects').select('id,name').eq('active', true).order('name'),
+      ]);
       if (error) throw error;
+      if (projectsError) throw projectsError;
       return res.json({ title: s.title, logoUrl: s.logo_url, openingAt: s.opening_at, closingAt: s.closing_at,
         durationMinutes: s.duration_minutes, multipleChoiceCount: s.mc_question_count, essayCount: s.essay_question_count,
-        invitationRequired: s.invitation_required,
+        invitationRequired: s.invitation_required, projects,
         active: s.active, serverNow: new Date().toISOString() });
     }
 

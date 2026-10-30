@@ -6,7 +6,11 @@ type Opt = { id: string; text: string };
 type Q = { id: string; text: string; type: 'single' | 'multiple' | 'essay'; points: number; options: Opt[] };
 type AnswerValue = { options: string[]; essay: string | null };
 type Res = { correct: number; incorrect: number; scoredPoints: number; totalPoints: number; result: 'PASS' | 'FAIL' } | null;
-type Info = { title: string; logoUrl: string; openingAt: string; closingAt: string; durationMinutes: number; multipleChoiceCount: number; essayCount: number; invitationRequired: boolean; active: boolean; serverNow: string };
+type Info = {
+  title: string; logoUrl: string; openingAt: string; closingAt: string; durationMinutes: number;
+  multipleChoiceCount: number; essayCount: number; invitationRequired: boolean; active: boolean;
+  serverNow: string; projects: { id: string; name: string }[];
+};
 type St = {
   status: string; serverNow: string; deadlineAt?: string; hasEssay?: boolean; displayMode?: 'paged' | 'all';
   candidate?: { fullName: string; position: string; level: string; mainProject: string };
@@ -46,7 +50,8 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
     else if (!/^[^\s@]+@tanminhnhan\.com\.vn$/i.test(f.email.trim())) v.email = 'Email phải có đuôi @tanminhnhan.com.vn.';
     if (f.position.trim().length < 2) v.position = 'Nhập chức danh.';
     if (!f.level.trim()) v.level = 'Nhập cấp bậc.';
-    if (!f.mainProject.trim()) v.mainProject = 'Nhập công trình chính.';
+    if (!f.mainProject || !info.projects.some((project) => project.name === f.mainProject))
+      v.mainProject = info.projects.length ? 'Chọn công trình chính trong danh sách.' : 'Danh sách công trình chưa được cấu hình. Vui lòng báo quản trị viên.';
     if (info.invitationRequired && !f.code.trim()) v.code = 'Nhập mã mời.';
     return v;
   };
@@ -101,7 +106,17 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
         {field('email', 'Email công ty (@tanminhnhan.com.vn)', 'email', 'email')}
         {field('position', 'Chức danh / vị trí')}
         {field('level', 'Cấp bậc')}
-        {field('mainProject', 'Công trình chính')}
+        <div>
+          <label htmlFor="mainProject" className="mb-1 block text-sm font-medium">Công trình chính</label>
+          <select id="mainProject" value={f.mainProject} onChange={(e) => setF({ ...f, mainProject: e.target.value })}
+            aria-invalid={!!fe.mainProject} aria-describedby={fe.mainProject ? 'mainProject-e' : undefined}
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base">
+            <option value="">-- Chọn công trình chính --</option>
+            {info.projects.map((project) => <option key={project.id} value={project.name}>{project.name}</option>)}
+          </select>
+          {fe.mainProject && <p id="mainProject-e" className="mt-1 text-sm text-red-700">{fe.mainProject}</p>}
+          {info.projects.length === 0 && <p className="mt-1 text-sm text-amber-700">Danh sách công trình chưa được cấu hình.</p>}
+        </div>
         {info.invitationRequired && field('code', 'Mã mời')}
         {err && <p role="alert" className="text-sm text-red-700">{err}</p>}
         {waiting && info.active && (
@@ -110,7 +125,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
           </p>
         )}
         {closed && <p role="status" className="text-sm text-red-700">Kỳ thi đã kết thúc.</p>}
-        <button disabled={busy || !info.active || waiting || closed} className="w-full rounded-md bg-teal-700 px-4 py-3 font-semibold text-white disabled:opacity-60">
+        <button disabled={busy || !info.active || waiting || closed || info.projects.length === 0} className="w-full rounded-md bg-teal-700 px-4 py-3 font-semibold text-white disabled:opacity-60">
           {busy ? 'Đang bắt đầu…' : waiting ? 'Chưa đến giờ thi' : 'Bắt đầu thi'}
         </button>
         {!info.active && <p className="text-sm text-slate-600">Kỳ thi hiện chưa được kích hoạt.</p>}

@@ -98,7 +98,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: () => void }) {
           <li>Tối đa {info.multipleChoiceCount} câu trắc nghiệm và {info.essayCount} câu tự luận ngẫu nhiên, tối đa {info.durationMinutes} phút kể từ lúc bạn bấm bắt đầu.</li>
           <li>Nếu bắt đầu muộn, hạn nộp bài là giờ đóng kỳ thi.</li>
           <li className="font-medium text-red-600 ">Nếu bạn chuyển sang tab hoặc cửa sổ khác, bài thi sẽ được nộp tự động ngay lập tức.</li>
-          <li>Khi hết giờ, các câu đã chọn được chấm; câu chưa trả lời tính là sai. Mỗi câu trắc nghiệm 1 điểm, điểm trắc nghiệm hiển thị ngay sau khi nộp; câu tự luận do giám khảo chấm riêng.</li>
+          <li>Khi hết giờ, các câu đã chọn được chấm; câu chưa trả lời tính là sai. Điểm trắc nghiệm được tự quy đổi về thang 10 theo số câu thực tế (20 câu thì mỗi câu đúng được 0,5 điểm); câu tự luận do giám khảo chấm riêng.</li>
         </ul>
       </section>
       <form onSubmit={go} noValidate className="space-y-4 rounded-lg border border-slate-200 bg-white p-5">
@@ -246,6 +246,10 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
     }, 500);
   };
   const q = qs[i];
+  const multipleChoiceCount = qs.filter((question) => question.type !== 'essay').length;
+  const pointsPerQuestion = multipleChoiceCount > 0
+    ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(10 / multipleChoiceCount)
+    : '0';
   const all = st.displayMode === 'all';
   const goTo = (n: number) => {
     setI(n);
@@ -260,11 +264,10 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
           <span className="font-medium">{st.candidate?.fullName}</span> · {st.candidate?.position}
           {' · '}{st.candidate?.level}{' · '}{st.candidate?.mainProject}
         </div>
-        <div className="flex items-center gap-4">
+        <div>
           <span className={'text-sm ' + (sync === 'error' ? 'text-red-700' : 'text-slate-600')} role="status">
             {sync === 'saved' ? 'Đã lưu' : sync === 'saving' ? 'Đang lưu…' : 'Lỗi lưu, đang thử lại'}
           </span>
-          <span className={'text-2xl font-semibold tabular-nums ' + (left < 300000 ? 'text-red-700' : '')} aria-label="Thời gian còn lại">{mm}:{ss}</span>
         </div>
       </div>
       {msg && <p role="alert" className="mb-4 rounded-md bg-amber-100 px-4 py-3 text-amber-900">{msg}</p>}
@@ -287,7 +290,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
         <div className="min-w-0 space-y-4">
         {(all ? qs : [q]).map((q, n) => (
         <section key={q.id} id={'q-' + q.id} className="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-5">
-          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-teal-700">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : '1 điểm'})</span></h2>
+          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-teal-700">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : `+${pointsPerQuestion} điểm`})</span></h2>
           {q.type === 'essay' ? (
             <label className="block">
               <span className="sr-only">Câu trả lời tự luận</span>
@@ -330,8 +333,13 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
         ))}
         {all && <div className="flex justify-end"><button onClick={() => setConfirm(true)} className="rounded-md bg-teal-700 px-6 py-3 font-semibold text-white">Nộp bài</button></div>}
         </div>
-        <nav aria-label="Danh sách câu hỏi" className="self-start rounded-lg border border-slate-200 bg-white p-3 md:sticky md:top-4">
-          <div className="grid grid-cols-5 gap-1.5">
+        <nav aria-label="Danh sách câu hỏi" className="order-first sticky top-2 z-20 self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm md:order-none md:top-4">
+        <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-center">
+          <span className="block text-xs font-medium text-amber-900">Thời gian còn lại</span>
+          <span className={'text-2xl font-bold tabular-nums ' + (left < 300000 ? 'text-red-700' : 'text-slate-900')}
+            aria-label={`Còn ${mm} phút ${ss} giây`}>{mm}:{ss}</span>
+        </div>
+        <div className="grid grid-cols-5 gap-1.5">
             {qs.map((x, n) => {
               const answer = ans[x.id];
               const answered = answer && (answer.essay !== null ? !!answer.essay.trim() : answer.options.length > 0);
@@ -342,6 +350,9 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
             })}
           </div>
           <button onClick={() => setConfirm(true)} className="mt-3 w-full rounded-md bg-teal-700 px-3 py-2 font-semibold text-white">Nộp bài</button>
+        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-center text-xs font-semibold leading-5 text-red-700">
+          Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu vi phạm.
+        </p>
         </nav>
       </div>
       {confirm && (
@@ -451,13 +462,19 @@ export default function App() {
           <h2 className="text-xl font-semibold">Bài thi đã được nộp</h2>
           {res ? (
             <>
-              <p className="mt-4 text-sm font-medium uppercase tracking-wide text-slate-500">Kết quả phần trắc nghiệm</p>
+              <p className="mt-4 text-sm font-medium uppercase tracking-wide text-slate-500">Kết quả bài thi</p>
               <p className={'mt-1 text-3xl font-bold ' + (res.result === 'PASS' ? 'text-teal-700' : 'text-red-700')}>{res.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-800">{res.scoredPoints} / {res.totalPoints} điểm</p>
-              <p className="mt-1 text-slate-600">Đúng {res.correct} câu, sai hoặc bỏ trống {res.incorrect} câu.</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-800">
+                Điểm trắc nghiệm: {res.correct + res.incorrect > 0 ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format((res.correct / (res.correct + res.incorrect)) * 10) : '—'} / 10
+              </p>
+              <p className="mt-1 text-slate-600">Đúng {res.correct} câu, sai hoặc bỏ trống {res.incorrect} câu. Điểm mỗi câu đã được quy đổi theo số câu trắc nghiệm thực tế.</p>
             </>
           ) : <p className="mt-3 text-slate-700">Phần trắc nghiệm đã được ghi nhận. Ban tổ chức sẽ thông báo kết quả.</p>}
-          {st?.hasEssay && <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">Phần tự luận sẽ do giám khảo chấm riêng và không nằm trong điểm trắc nghiệm ở trên.</p>}
+          {st?.hasEssay && <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+            {res
+              ? 'Điểm trắc nghiệm được hiển thị riêng trên thang 10; kết quả đạt/không đạt căn cứ theo tổng điểm bài thi, gồm cả phần tự luận.'
+              : 'Phần tự luận sẽ do giám khảo chấm riêng và không nằm trong điểm trắc nghiệm ở trên.'}
+          </p>}
           <p className="mt-4 text-sm text-slate-600">File PDF chỉ chứa câu hỏi và lựa chọn/bài làm của bạn, không có đáp án chuẩn.</p>
           {exportError && <p role="alert" className="mt-3 text-sm text-red-700">{exportError}</p>}
           {resetError && <p role="alert" className="mt-4 text-sm text-red-700">{resetError}</p>}

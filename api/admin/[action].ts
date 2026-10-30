@@ -10,6 +10,8 @@ import { buildResultsWorkbook } from '../_lib/workbook.js';
 import { buildReviewPdf, reviewPdfName } from '../_lib/review-pdf.js';
 import { appendZipEntry } from '../_lib/zip.js';
 import { parseRows, parseText } from '../_lib/import.js';
+import { buildExamDashboard } from '../_lib/dashboard.js';
+import { passingScoreToPercentage, scoreBucketOutOfTen } from '../_lib/scoring.js';
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
 
@@ -25,7 +27,8 @@ const SettingsIn = z.object({
   durationMinutes: z.number().int().min(1).max(600),
   multipleChoiceCount: z.number().int().min(0).max(1000),
   essayCount: z.number().int().min(0).max(1000),
-  passingPercentage: z.number().int().min(1).max(100),
+  passingScore: z.number().min(0.1).max(10)
+    .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-8, 'Điểm đạt tối đa một chữ số thập phân.'),
   invitationRequired: z.boolean(),
   showScore: z.boolean(),
   displayMode: z.enum(['paged', 'all']),
@@ -44,7 +47,7 @@ const toLocal = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOS
 const settingsOut = (s: SettingsRow) => ({
   title: s.title, openingAt: toLocal(s.opening_at), closingAt: toLocal(s.closing_at),
   durationMinutes: s.duration_minutes, multipleChoiceCount: s.mc_question_count, essayCount: s.essay_question_count,
-  passingPercentage: s.passing_percentage,
+  passingScore: s.passing_percentage / 10,
   invitationRequired: s.invitation_required, showScore: s.show_score, displayMode: s.display_mode ?? 'paged', active: s.active,
 });
 const adminOk = (req: VercelRequest) => {
@@ -74,6 +77,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) throw error;
       return res.json({ projects: data });
     }
+    if (action === 'dashboard' && req.method === 'GET') {
+      if (await limited('dashboard:' + ip(req), 60, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' });
+      const { data: projectRows, error: projectError } = await sb.from('exam_projects')
+        .select('id,name,active').order('name');
+      if (projectError) throw projectError;
+      const pageSize = 1000;
+      const attempts: {
+        project_id: string | null;
+        main_project: string | null;
+        candidate_level: string | null;
+        correct_count: number | null;
+        incorrect_count: number | null;
+        result: string | null;
+      }[] = [];
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await sb.from('exam_attempts')
+          .select('project_id,main_project,candidate_level,correct_count,incorrect_count,result')
+          .neq('status', 'in_progress').order('id').range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        attempts.push(...data);
+        if (data.length < pageSize) break;
+      }
+
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      const level = typeof req.query.level === 'string' ? req.query.level : '';
+      const scoreBucket = typeof req.query.scoreBucket === 'string' ? req.query.scoreBucket : '';
+      if (projectId && !z.string().uuid().safeParse(projectId).success)
+        return res.status(400).json({ error: 'Bộ lọc công trình không hợp lệ.' });
+      if (level.length > 100) return res.status(400).json({ error: 'Bộ lọc cấp bậc không hợp lệ.' });
+      if (scoreBucket && (!/^(?:[0-9]|10)$/.test(scoreBucket)))
+        return res.status(400).json({ error: 'Bộ lọc điểm không hợp lệ.' });
+
+      const levelOptions = [...new Set(attempts.map((attempt) => attempt.candidate_level?.trim() || 'Chưa khai báo'))]
+        .sort((a, b) => a.localeCompare(b, 'vi'));
+      const filtered = attempts.filter((attempt) => {
+        if (projectId && attempt.project_id !== projectId) return false;
+        if (level && (attempt.candidate_level?.trim() || 'Chưa khai báo') !== level) return false;
+        if (scoreBucket) {
+          const mcTotal = (attempt.correct_count ?? 0) + (attempt.incorrect_count ?? 0);
+          if (scoreBucketOutOfTen(attempt.correct_count, mcTotal) !== Number(scoreBucket)) return false;
+        }
+        return true;
+      });
+      return res.json({
+        dashboard: buildExamDashboard(filtered, projectRows),
+        levelOptions,
+      });
+    }
     if (action === 'projects' && req.method === 'POST') {
       const p = z.object({ name: z.string().trim().min(1).max(200) }).safeParse(req.body);
       if (!p.success) return res.status(400).json({ error: 'Tên công trình không hợp lệ.' });
@@ -82,6 +133,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error?.code === '23505') return res.status(409).json({ error: 'Tên công trình này đã có trong danh sách.' });
       if (error) throw error;
       return res.status(201).json(data);
+    }
+    if (action === 'projects' && req.method === 'DELETE') {
+      const p = z.object({ id: z.string().uuid() }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Công trình cần xóa không hợp lệ.' });
+      const { count, error: countError } = await sb.from('exam_attempts')
+        .select('id', { count: 'exact', head: true }).eq('project_id', p.data.id);
+      if (countError) throw countError;
+      if ((count ?? 0) > 0)
+        return res.status(409).json({ error: 'Công trình đã có bài thi lịch sử nên không thể xóa. Hãy ẩn công trình để giữ dữ liệu cũ.' });
+      const { data, error } = await sb.from('exam_projects').delete()
+        .eq('id', p.data.id).select('id').maybeSingle();
+      if (error?.code === '23503')
+        return res.status(409).json({ error: 'Công trình vừa được dùng trong bài thi nên không thể xóa. Hãy ẩn công trình để giữ dữ liệu cũ.' });
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Không tìm thấy công trình.' });
+      return res.json({ id: data.id });
     }
     if (action === 'projects' && req.method === 'PUT') {
       const p = z.object({ id: z.string().uuid(), active: z.boolean() }).safeParse(req.body);
@@ -132,7 +199,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         opening_at: `${d.openingAt}:00${VN_OFFSET}`, closing_at: `${d.closingAt}:00${VN_OFFSET}`,
         duration_minutes: d.durationMinutes, question_count: d.multipleChoiceCount + d.essayCount,
         mc_question_count: d.multipleChoiceCount, essay_question_count: d.essayCount,
-        passing_percentage: d.passingPercentage,
+        passing_percentage: passingScoreToPercentage(d.passingScore),
         invitation_required: d.invitationRequired, show_score: d.showScore, display_mode: d.displayMode, active: d.active,
         updated_at: new Date().toISOString(),
       }).eq('id', 1).select('*').single();
@@ -246,7 +313,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'template' && req.method === 'GET') {
       if (req.query.format === 'docx') {
         const lines = [
-          'HƯỚNG DẪN: mỗi câu bắt đầu bằng số thứ tự. Có thể ghi Loại: single, multiple hoặc essay (mặc định single). Mỗi câu trắc nghiệm luôn được 1 điểm; Điểm: số chỉ dùng cho câu tự luận.',
+          'HƯỚNG DẪN: mỗi câu bắt đầu bằng số thứ tự. Có thể ghi Loại: single, multiple hoặc essay (mặc định single). Mỗi câu trắc nghiệm có 1 điểm nội bộ và hệ thống tự quy đổi tổng điểm về thang 10 (20 câu thì mỗi câu đúng được 0,5 điểm). Điểm: số chỉ dùng cho câu tự luận.',
           'Câu trắc nghiệm ghi A-F và Đáp án: A hoặc A,C. Câu tự luận ghi Đáp án tham khảo: nội dung đáp án.',
           'Xóa ví dụ trước khi nhập câu hỏi thật.', '',
           '1. Thủ đô của Việt Nam là?', 'Loại: single', 'Điểm: 1',
@@ -262,11 +329,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.send(buf);
       }
       const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Câu hỏi');
-      ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng (A,C)', 'Loại', 'Điểm (chỉ tự luận)', 'Đáp án tham khảo']);
+      ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng (A,C)', 'Loại', 'Điểm tối đa (chỉ tự luận)', 'Đáp án tham khảo']);
       ws.addRow(['Thủ đô của Việt Nam là?', 'Hà Nội', 'Huế', 'Đà Nẵng', 'Cần Thơ', '', '', 'A', 'single', 1, '']);
       ws.addRow(['Chọn các số nguyên tố', '2', '4', '5', '', '', '', 'A,C', 'multiple', '', '']);
       ws.addRow(['Trình bày một giải pháp bảo vệ môi trường', '', '', '', '', '', '', '', 'essay', 5, 'Nêu biện pháp giảm rác thải, tiết kiệm tài nguyên và bảo vệ hệ sinh thái.']);
       ws.getRow(1).font = { bold: true };
+      ws.getCell(1, 10).note = 'Trắc nghiệm không nhập điểm ở cột này. Mỗi câu trắc nghiệm tính 1 điểm nội bộ và tổng điểm tự quy đổi về thang 10 (20 câu: 0,5 điểm/câu).';
       ws.columns.forEach((c, i) => { c.width = i === 0 ? 50 : i === 10 ? 60 : 18; });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="mau-cau-hoi.xlsx"');

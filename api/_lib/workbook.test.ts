@@ -34,7 +34,10 @@ describe('buildResultsWorkbook', () => {
     expect(headers.some((h) => h.includes('Bắt đầu'))).toBe(true);
     expect(headers.some((h) => h.includes('Kết thúc'))).toBe(true);
     expect(headers.some((h) => h.includes('Thời gian làm bài'))).toBe(true);
+    expect(headers.some((h) => h.includes('thang 10'))).toBe(true);
     expect(mc.getRow(2).values).toContain('Nguyen A');
+    expect(mc.getRow(2).getCell(14).value).toBe(10);
+    expect(mc.getRow(2).getCell(15).value).toBe(10);
 
     const essay = loaded.getWorksheet('Kết quả tự luận')!;
     expect(essay.rowCount).toBe(2);
@@ -42,6 +45,7 @@ describe('buildResultsWorkbook', () => {
 
     const review = loaded.getWorksheet('Hồ sơ phúc khảo')!;
     expect(review.rowCount).toBe(2);
+    expect(review.getRow(2).getCell(11).value).toBe(10);
     expect((review.getRow(2).getCell(13).value as { hyperlink: string }).hyperlink).toBe('pdfs/0001_Nguyen_A_CT1.pdf');
   });
 });

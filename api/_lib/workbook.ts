@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import { escapeCell } from './pure.js';
 import { reviewPdfName } from './review-pdf.js';
+import { scoreOutOfTen } from './scoring.js';
 
 type Option = { id: string; text: string };
 type Key = { correct_options: string[] | null; reference_answer: string | null };
@@ -89,7 +90,7 @@ export function buildResultsWorkbook(input: {
   const mc = addSheet(wb, 'Kết quả trắc nghiệm', COLOR.mc, [
     { header: 'STT', width: 7 }, ...person, ...candidate,
     { header: 'Số câu trắc nghiệm', width: 14 }, { header: 'Số câu đúng', width: 12 }, { header: 'Số câu sai / bỏ trống', width: 14 },
-    { header: 'Điểm trắc nghiệm (1 điểm/câu)', width: 16 }, { header: 'Điểm tối đa', width: 11 }, { header: 'Tỷ lệ đúng', width: 11 },
+    { header: 'Điểm trắc nghiệm (thang 10)', width: 16 }, { header: 'Điểm tối đa (thang 10)', width: 15 }, { header: 'Tỷ lệ đúng (%)', width: 13 },
     { header: 'Kết quả trắc nghiệm', width: 17 }, { header: 'Điểm tự luận (giám khảo chấm)', width: 18 }, { header: 'Điểm tự luận tối đa', width: 13 },
   ]);
   const essay = addSheet(wb, 'Kết quả tự luận', COLOR.essay, [
@@ -100,13 +101,13 @@ export function buildResultsWorkbook(input: {
   ]);
   const review = addSheet(wb, 'Hồ sơ phúc khảo', COLOR.detail, [
     { header: 'STT', width: 7 }, ...person, ...candidate,
-    { header: 'Điểm trắc nghiệm', width: 14 }, { header: 'Kết quả', width: 18 },
+    { header: 'Điểm trắc nghiệm (thang 10)', width: 20 }, { header: 'Kết quả', width: 18 },
     { header: 'Tệp PDF phúc khảo (trong ZIP)', width: 42 },
   ]);
   const keySheet = addSheet(wb, 'Đáp án', COLOR.key, [
     { header: 'Mã câu hỏi', width: 38 }, { header: 'Loại', width: 15 }, { header: 'Câu hỏi', width: 55 },
     { header: 'Các lựa chọn', width: 50 }, { header: 'Đáp án đúng', width: 35 }, { header: 'Đáp án tham khảo (tự luận)', width: 60 },
-    { header: 'Điểm', width: 9 },
+    { header: 'Điểm (trắc nghiệm nội bộ; tự luận tối đa)', width: 38 },
   ]);
 
   const essayCol = (i: number) => essay.getColumn(i).letter;
@@ -116,24 +117,25 @@ export function buildResultsWorkbook(input: {
     const who = [a.id, escapeCell(a.full_name), escapeCell(a.normalized_email)];
     const profile = [escapeCell(a.position), escapeCell(a.candidate_level), escapeCell(a.main_project)];
     const times = [vnDate(a.started_at), vnDate(a.submitted_at), durationDays(a.started_at, a.submitted_at)];
-    const total = a.total_points ?? 0;
+    const total = a.question_order.filter((id) => questionMap.get(id)?.question_type !== 'essay').length;
     const correct = a.correct_count ?? 0;
+    const score = scoreOutOfTen(correct, total);
     const essayCount = a.question_order.filter((id) => questionMap.get(id)?.question_type === 'essay').length;
     const row = mc.addRow([
       ++mcNo, ...who, ...profile, ...times, total, correct, a.incorrect_count ?? Math.max(total - correct, 0),
-      a.scored_points ?? correct, total, total > 0 ? correct / total : null,
+      score, total > 0 ? 10 : null, total > 0 ? correct / total : null,
       a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : total === 0 ? 'Không có trắc nghiệm' : '',
       essayCount > 0 ? { formula: `SUMIFS('Kết quả tự luận'!$${essayScoreCol}:$${essayScoreCol},'Kết quả tự luận'!$${essayIdCol}:$${essayIdCol},$B${mcNo + 1})`, result: 0 } : 'Không có',
       essayCount > 0 ? { formula: `SUMIFS('Kết quả tự luận'!$${essayMaxCol}:$${essayMaxCol},'Kết quả tự luận'!$${essayIdCol}:$${essayIdCol},$B${mcNo + 1})`, result: 0 } : 'Không có',
     ]);
     row.getCell(8).numFmt = DATE_FORMAT; row.getCell(9).numFmt = DATE_FORMAT; row.getCell(10).numFmt = DURATION_FORMAT;
-    row.getCell(16).numFmt = '0.0%';
+    row.getCell(14).numFmt = '0.00'; row.getCell(15).numFmt = '0'; row.getCell(16).numFmt = '0.0%';
     const verdict = row.getCell(17);
     if (a.result === 'PASS') tone(verdict, 'ok'); else if (a.result === 'FAIL') tone(verdict, 'bad'); else tone(verdict, 'warn');
 
     const reviewPath = `pdfs/${reviewPdfName(a, mcNo - 1)}`;
     const reviewRow = review.addRow([
-      mcNo, ...who, ...profile, ...times, a.scored_points ?? correct,
+      mcNo, ...who, ...profile, ...times, score,
       a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chưa có kết quả',
       { text: reviewPath, hyperlink: reviewPath },
     ]);

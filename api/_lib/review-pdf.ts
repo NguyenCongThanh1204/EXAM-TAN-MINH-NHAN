@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import PDFDocument from 'pdfkit';
+import { formatScoreOutOfTen } from './scoring.js';
 import type { ExportAnswer, ExportAttempt, ExportQuestion } from './workbook.js';
 
 const FONT_REGULAR = readFileSync(new URL('../../node_modules/@fontsource/tinos/files/tinos-vietnamese-400-normal.woff', import.meta.url));
@@ -272,7 +273,7 @@ export function buildReviewPdf(input: {
       `Công trình chính: ${a.main_project}`,
       `Bắt đầu: ${time(a.started_at)}`,
       `Nộp bài: ${time(a.submitted_at)}    Thời lượng: ${duration(a.started_at, a.submitted_at)}`,
-      `Kết quả trắc nghiệm: ${a.scored_points ?? 0}/${a.total_points ?? 0} điểm    ${a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chưa có kết quả'}`,
+      `Điểm trắc nghiệm: ${formatScoreOutOfTen(a.correct_count, (a.correct_count ?? 0) + (a.incorrect_count ?? 0))}/10 ${a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chưa có kết quả'}`,
     ].forEach((line) => writeText(doc, line));
     doc.moveDown(0.8);
     doc.moveTo(46, doc.y).lineTo(549, doc.y).strokeColor('#cbd5e1').stroke();

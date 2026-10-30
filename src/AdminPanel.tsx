@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from './api';
 import { useUi } from './ui';
+import type { ExamDashboard, DashboardMetric } from '../api/_lib/dashboard';
 
 type Item = {
   text: string; type: 'single' | 'multiple' | 'essay'; points: number;
@@ -14,7 +15,7 @@ type Preview = {
 type Run = (f: () => Promise<void>) => Promise<void>;
 type Settings = {
   title: string; openingAt: string; closingAt: string; durationMinutes: number;
-  multipleChoiceCount: number; essayCount: number; passingPercentage: number; invitationRequired: boolean; showScore: boolean;
+  multipleChoiceCount: number; essayCount: number; passingScore: number; invitationRequired: boolean; showScore: boolean;
   displayMode: 'paged' | 'all'; active: boolean;
 };
 type ActiveCode = { limit: number; uses: number; createdAt: string } | null;
@@ -90,7 +91,10 @@ function SettingsForm({ run }: { run: Run }) {
           <Field label="Thời lượng làm bài (phút)"><input type="number" min={1} max={600} className={inputCls} value={s.durationMinutes} onChange={(e) => set('durationMinutes', Number(e.target.value))} /></Field>
           <Field label="Số câu trắc nghiệm" ><input type="number" min={0} max={1000} className={inputCls} value={s.multipleChoiceCount} onChange={(e) => set('multipleChoiceCount', Number(e.target.value))} /></Field>
           <Field label="Số câu tự luận" ><input type="number" min={0} max={1000} className={inputCls} value={s.essayCount} onChange={(e) => set('essayCount', Number(e.target.value))} /></Field>
-          <Field label="Ngưỡng đạt (%)"><input type="number" min={1} max={100} className={inputCls} value={s.passingPercentage} onChange={(e) => set('passingPercentage', Number(e.target.value))} /></Field>
+          <Field label="Điểm đạt (thang 10)" hint="Ví dụ 7,5/10 tương đương ngưỡng 75%.">
+            <input type="number" min={0.1} max={10} step={0.1} className={inputCls} value={s.passingScore}
+              onChange={(e) => set('passingScore', Number(e.target.value))} />
+          </Field>
         </div>
       </Card>
 
@@ -124,7 +128,7 @@ function SettingsForm({ run }: { run: Run }) {
 }
 
 function Projects({ run }: { run: Run }) {
-  const { toast } = useUi();
+  const { confirm, toast } = useUi();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -155,8 +159,24 @@ function Projects({ run }: { run: Run }) {
     toast('success', updated.active ? 'Đã mở lựa chọn công trình.' : 'Đã ẩn công trình khỏi lựa chọn; dữ liệu bài thi cũ được giữ nguyên.');
   });
 
+  const deleteProject = (project: Project) => void run(async () => {
+    const ok = await confirm({
+      title: `Xóa công trình "${project.name}"?`,
+      message: 'Chỉ xóa được công trình chưa có bài thi liên quan. Nếu đã có dữ liệu cũ, hãy dùng nút Ẩn để giữ lịch sử và thống kê.',
+      confirmText: 'Xóa công trình',
+      danger: true,
+    });
+    if (!ok) return;
+    await api<{ id: string }>('admin/projects', {
+      method: 'DELETE',
+      body: JSON.stringify({ id: project.id }),
+    });
+    setProjects((current) => current?.filter((item) => item.id !== project.id) ?? []);
+    toast('success', 'Đã xóa công trình.');
+  });
+
   return (
-    <Card id="project-catalog" title="Danh sách công trình" desc="Thí sinh chỉ chọn được công trình đang hoạt động. Công trình đã dùng trong bài thi được giữ lại để phục vụ thống kê và hồ sơ cũ.">
+    <Card id="project-catalog" title="Danh sách công trình" desc="Có thể xóa công trình chưa từng được dùng. Công trình đã liên quan đến bài thi chỉ có thể ẩn để giữ dữ liệu lịch sử.">
       <form onSubmit={add} className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <Field label="Tên công trình mới" className="flex-1">
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required />
@@ -165,17 +185,20 @@ function Projects({ run }: { run: Run }) {
       </form>
       {projects === null ? <p className="text-sm text-slate-500">Đang tải danh sách…</p>
         : projects.length === 0 ? <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Chưa có công trình. Hãy thêm danh sách trước khi mở kỳ thi cho thí sinh.</p>
-          : <ul className="divide-y divide-slate-200 rounded-xl border border-slate-200">
+          : <ul className="max-h-80 divide-y divide-slate-200 overflow-y-auto rounded-xl border border-slate-200">
             {projects.map((project) => (
               <li key={project.id} className="flex items-center justify-between gap-4 px-3 py-3">
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-slate-800">{project.name}</span>
                   <span className={'text-xs ' + (project.active ? 'text-emerald-700' : 'text-slate-500')}>{project.active ? 'Đang cho phép chọn' : 'Đã ẩn · dữ liệu lịch sử được giữ'}</span>
                 </span>
-                <button type="button" className={project.active ? btnGhost : btnPrimary}
-                  onClick={() => setActive(project)}>
-                  {project.active ? 'Ẩn' : 'Kích hoạt'}
-                </button>
+                <div className="flex shrink-0 gap-2">
+                  <button type="button" className={project.active ? btnGhost : btnPrimary}
+                    onClick={() => setActive(project)}>
+                    {project.active ? 'Ẩn' : 'Kích hoạt'}
+                  </button>
+                  <button type="button" className={btnDanger} onClick={() => deleteProject(project)}>Xóa</button>
+                </div>
               </li>
             ))}
           </ul>}
@@ -277,6 +300,7 @@ function Import({ run }: { run: Run }) {
         <button disabled={!file} className={btnDark} onClick={() => void run(async () => setPv(await call(false)))}>Kiểm tra tệp</button>
         <button disabled={!file || !pv?.ok} className={btnPrimary} onClick={() => void commit()}>Lưu vào hệ thống</button>
       </div>
+      <p className="text-xs text-slate-500">Mỗi câu trắc nghiệm có 1 điểm nội bộ; hệ thống tự quy đổi tổng điểm về thang 10. Với 20 câu, mỗi câu đúng tương đương 0,5 điểm. Cột điểm trong mẫu chỉ nhập cho câu tự luận.</p>
       {saved !== null && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">Đã lưu {saved} câu hỏi.</p>}
       {pv && (
         <div className="space-y-3 text-sm">
@@ -287,13 +311,193 @@ function Import({ run }: { run: Run }) {
             <ol className="max-h-72 list-decimal space-y-3 overflow-auto rounded-xl border border-slate-200 p-4 pl-9">
               {pv.preview.map((q, i) => (
                 <li key={i}>
-                  <div>{q.text} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{q.type === 'essay' ? `tự luận, tối đa ${q.points} điểm` : `${q.type === 'multiple' ? 'nhiều đáp án' : 'một đáp án'}, 1 điểm`}</span></div>
+                  <div>{q.text} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{q.type === 'essay' ? `tự luận, tối đa ${q.points} điểm` : `${q.type === 'multiple' ? 'nhiều đáp án' : 'một đáp án'}, 1 điểm nội bộ`}</span></div>
                   {q.type !== 'essay' && <div className="mt-1 flex flex-wrap gap-x-4 text-slate-600">{q.options.map((o) => <span key={o.id} className={q.correct.includes(o.id) ? 'font-semibold text-teal-700' : ''}>{o.id.toUpperCase()}. {o.text}</span>)}</div>}
                   {q.type === 'essay' && <div className="mt-1 text-slate-600">Đáp án tham khảo: {q.referenceAnswer}</div>}
                 </li>
               ))}
             </ol>
           )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+type DashboardResponse = { dashboard: ExamDashboard; levelOptions: string[] };
+type DashboardGroup = { label: string; metric: DashboardMetric };
+const scoreLabels = ['0,0–0,9', '1,0–1,9', '2,0–2,9', '3,0–3,9', '4,0–4,9', '5,0–5,9', '6,0–6,9', '7,0–7,9', '8,0–8,9', '9,0–9,9', '10'];
+const countFormat = new Intl.NumberFormat('vi-VN');
+const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
+const scoreFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
+const displayPercent = (value: number | null) => value === null ? '—' : `${percentFormat.format(value)}%`;
+const displayScore = (value: number | null) => value === null ? '—' : `${scoreFormat.format(value)} / 10`;
+
+function DashboardChart({ metric }: { metric: DashboardMetric }) {
+  const decided = metric.pass + metric.fail;
+  const passPercentage = decided ? (metric.pass / decided) * 100 : 0;
+  const gradient = decided
+    ? `conic-gradient(#0f766e 0% ${passPercentage}%, #dc2626 ${passPercentage}% 100%)`
+    : '#e2e8f0';
+  const maxCount = Math.max(1, ...metric.scoreDistribution.map((bucket) => bucket.count));
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section aria-labelledby="dashboard-pass-title" className="rounded-xl border border-slate-200 p-4">
+        <h3 id="dashboard-pass-title" className="text-sm font-semibold text-slate-800">Tỷ lệ đạt / không đạt</h3>
+        <div className="mt-4 flex flex-wrap items-center gap-6">
+          <div role="img" aria-label={`Tỷ lệ đạt ${displayPercent(passPercentage)} trong ${countFormat.format(decided)} bài đã có kết quả`}
+            className="flex h-36 w-36 items-center justify-center rounded-full"
+            style={{ background: gradient }}>
+            <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-white text-center">
+              <span className="text-lg font-bold text-slate-900">{displayPercent(decided ? passPercentage : null)}</span>
+              <span className="text-xs text-slate-500">đạt</span>
+            </div>
+          </div>
+          <div className="space-y-2 text-sm">
+            <p className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm bg-teal-700" />Đạt: <b>{countFormat.format(metric.pass)}</b></p>
+            <p className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm bg-red-600" />Không đạt: <b>{countFormat.format(metric.fail)}</b></p>
+            <p className="text-slate-500">Chưa có kết quả: {countFormat.format(metric.pending)}</p>
+          </div>
+        </div>
+      </section>
+      <section aria-labelledby="dashboard-score-title" className="rounded-xl border border-slate-200 p-4">
+        <h3 id="dashboard-score-title" className="text-sm font-semibold text-slate-800">Phân bố điểm trắc nghiệm (thang 10)</h3>
+        <div role="img" aria-label="Biểu đồ số bài thi theo khoảng điểm trên thang 10"
+          className="mt-4 flex h-40 items-end gap-1 border-b border-l border-slate-200 px-2">
+          {metric.scoreDistribution.map((bucket) => (
+            <div key={bucket.label} title={`${bucket.label}/10: ${countFormat.format(bucket.count)} bài`}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end">
+              {bucket.count > 0 && <span className="mb-1 text-[10px] text-slate-600">{countFormat.format(bucket.count)}</span>}
+              <div className="w-full max-w-7 rounded-t bg-teal-600 transition-all"
+                style={{ height: `${bucket.count ? Math.max(4, (bucket.count / maxCount) * 100) : 0}%` }} />
+              <span className="mt-1 whitespace-nowrap text-[9px] text-slate-500">{bucket.label}</span>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">Mỗi khoảng rộng 1 điểm trên thang 10.</p>
+      </section>
+    </div>
+  );
+}
+
+function ResultsDashboard() {
+  const [projectId, setProjectId] = useState('');
+  const [level, setLevel] = useState('');
+  const [scoreBucket, setScoreBucket] = useState('');
+  const [compareBy, setCompareBy] = useState<'project' | 'level'>('project');
+  const [response, setResponse] = useState<DashboardResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [refresh, setRefresh] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    setResponse(null);
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+    if (level) params.set('level', level);
+    if (scoreBucket) params.set('scoreBucket', scoreBucket);
+    const query = params.size ? `?${params.toString()}` : '';
+    api<DashboardResponse>(`admin/dashboard${query}`)
+      .then((data) => { if (active) setResponse(data); })
+      .catch((e: Error) => { if (active) setError(e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [projectId, level, scoreBucket, refresh]);
+
+  const dashboard = response?.dashboard;
+  const metric = dashboard?.overall;
+  const groups: DashboardGroup[] = compareBy === 'project'
+    ? (dashboard?.projects ?? []).map((project) => ({ label: project.name, metric: project }))
+    : (dashboard?.levels ?? []).map((item) => ({ label: item.level, metric: item }));
+
+  return (
+    <Card id="res-dashboard" title="Thống kê kết quả thi" desc="Chỉ tính các lượt đã nộp; bài đang làm không được đưa vào thống kê.">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Công trình">
+          <select className={inputCls} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="">Tất cả công trình</option>
+            {dashboard?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}{project.active ? '' : ' (đã ẩn)'}</option>)}
+          </select>
+        </Field>
+        <Field label="Cấp bậc">
+          <select className={inputCls} value={level} onChange={(e) => setLevel(e.target.value)}>
+            <option value="">Tất cả cấp bậc</option>
+            {response?.levelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </Field>
+        <Field label="Khoảng điểm trắc nghiệm">
+          <select className={inputCls} value={scoreBucket} onChange={(e) => setScoreBucket(e.target.value)}>
+            <option value="">Tất cả điểm</option>
+            {scoreLabels.map((label, index) => <option key={label} value={index}>{label} điểm</option>)}
+          </select>
+        </Field>
+        <div className="flex items-end">
+          <button type="button" className={btnGhost + ' w-full'} disabled={loading} onClick={() => setRefresh((value) => value + 1)}>
+            {loading ? 'Đang tải…' : 'Làm mới số liệu'}
+          </button>
+        </div>
+      </div>
+
+      {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
+      {loading && !metric && <p role="status" className="text-sm text-slate-500">Đang tải thống kê…</p>}
+      {metric && (
+        <div aria-busy={loading} className="space-y-6">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: 'Tổng lượt đã nộp', value: countFormat.format(metric.total), color: 'text-slate-900' },
+              { label: 'Đạt', value: countFormat.format(metric.pass), color: 'text-teal-700' },
+              { label: 'Không đạt', value: countFormat.format(metric.fail), color: 'text-red-700' },
+              { label: 'Điểm trắc nghiệm trung bình', value: displayScore(metric.averageScore), color: 'text-slate-900' },
+            ].map((item) => (
+              <div key={item.label} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-medium text-slate-500">{item.label}</p>
+                <p className={'mt-1 text-2xl font-bold ' + item.color}>{item.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <DashboardChart metric={metric} />
+
+          <section aria-labelledby="dashboard-groups-title" className="rounded-xl border border-slate-200 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 id="dashboard-groups-title" className="text-sm font-semibold text-slate-800">So sánh tỷ lệ đạt theo nhóm</h3>
+                <p className="mt-1 text-xs text-slate-500">Tỷ lệ được tính trên các bài đã có kết quả đạt hoặc không đạt.</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" aria-pressed={compareBy === 'project'} onClick={() => setCompareBy('project')}
+                  className={compareBy === 'project' ? btnPrimary : btnGhost}>Công trình</button>
+                <button type="button" aria-pressed={compareBy === 'level'} onClick={() => setCompareBy('level')}
+                  className={compareBy === 'level' ? btnPrimary : btnGhost}>Cấp bậc</button>
+              </div>
+            </div>
+            {groups.length === 0 || !metric.total ? (
+              <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500">Không có dữ liệu phù hợp với bộ lọc.</p>
+            ) : (
+              <div className="mt-4 max-h-80 space-y-3 overflow-y-auto pr-1">
+                {groups.map(({ label, metric: group }) => {
+                  const completed = group.pass + group.fail;
+                  const rate = completed ? (group.pass / completed) * 100 : 0;
+                  return (
+                    <div key={label} className="grid gap-2 sm:grid-cols-[minmax(8rem,1fr)_2fr_auto] sm:items-center">
+                      <span className="truncate text-sm font-medium text-slate-700" title={label}>{label}</span>
+                      <div className="h-3 overflow-hidden rounded-full bg-slate-100" role="img"
+                        aria-label={`${label}: tỷ lệ đạt ${displayPercent(completed ? rate : null)}`}>
+                        <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${rate}%` }} />
+                      </div>
+                      <span className="text-xs tabular-nums text-slate-600">
+                        {completed ? `${displayPercent(rate)} · ${group.pass}/${completed} đạt` : 'Chưa có kết quả'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </Card>
@@ -339,6 +543,7 @@ function Results({ run }: { run: Run }) {
   };
   return (
     <div className="space-y-6">
+      <ResultsDashboard />
       <Card id="res-export" title="Kết quả thi và hồ sơ phúc khảo" desc="Tải một file ZIP gồm bảng Excel và PDF riêng cho từng bài thi đã nộp. Trong file Excel, sheet Hồ sơ phúc khảo có liên kết đến PDF tương ứng.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 p-4">

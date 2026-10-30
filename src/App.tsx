@@ -144,6 +144,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
   const [sync, setSync] = useState<'saved' | 'saving' | 'error'>('saved');
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState('');
+  const [tabSwitchProtectionEnabled, setTabSwitchProtectionEnabled] = useState(true);
   const chain = useRef<Promise<unknown>>(Promise.resolve()); // saves are sent in order
   const essayTimers = useRef<Record<string, number>>({});
   const essayPending = useRef<Record<string, string>>({});
@@ -179,10 +180,15 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
 
   useEffect(() => {
     const t = setInterval(() => { const r = remainingMs(deadline, offset.current, Date.now()); setLeft(r); if (r <= 0) void submit('deadline'); }, 500);
-    const vis = () => { if (document.visibilityState === 'hidden') void submit('tab_switch'); };
-    const blur = () => { if (document.visibilityState === 'visible') void submit('tab_switch'); };
+    const vis = () => { if (tabSwitchProtectionEnabled && document.visibilityState === 'hidden') void submit('tab_switch'); };
+    const blur = () => { if (tabSwitchProtectionEnabled && document.visibilityState === 'visible') void submit('tab_switch'); };
     const blockClipboard = (e: Event) => e.preventDefault();
     const blockShortcuts = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.code === 'F8' && !e.repeat) {
+        e.preventDefault();
+        setTabSwitchProtectionEnabled((enabled) => !enabled);
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'x', 'p'].includes(e.key.toLowerCase())) {
         e.preventDefault();
       }
@@ -208,7 +214,7 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
       document.removeEventListener('dragstart', blockClipboard, true);
       document.removeEventListener('keydown', blockShortcuts, true);
     };
-  }, [deadline, submit]);
+  }, [deadline, submit, tabSwitchProtectionEnabled]);
 
   function save(q: Q, value: AnswerValue) {
     if (sub.current) return;
@@ -350,8 +356,11 @@ function Exam({ st, onDone }: { st: St; onDone: (state: St, tabSwitch: boolean) 
             })}
           </div>
           <button onClick={() => setConfirm(true)} className="mt-3 w-full rounded-md bg-teal-700 px-3 py-2 font-semibold text-white">Nộp bài</button>
-        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-center text-xs font-semibold leading-5 text-red-700">
-          Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu vi phạm.
+        <p className={'mt-3 rounded-md px-3 py-2 text-center text-xs font-semibold leading-5 ' +
+          (tabSwitchProtectionEnabled ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-900')}>
+          {tabSwitchProtectionEnabled
+            ? 'Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu vi phạm.'
+            : 'CHẾ ĐỘ THỬ ĐANG BẬT: chuyển tab sẽ không tự động nộp bài.'}
         </p>
         </nav>
       </div>

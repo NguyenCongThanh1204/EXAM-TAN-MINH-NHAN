@@ -18,8 +18,13 @@ describe('buildExamDashboard', () => {
       total: 4, pass: 1, fail: 1, pending: 2, graded: 2,
       averageScore: 6,
     });
-    expect(dashboard.overall.scoreDistribution[8].count).toBe(1);
-    expect(dashboard.overall.scoreDistribution[4].count).toBe(1);
+    expect(dashboard.overall.scoreDistribution).toEqual([
+      { label: '<5', count: 1 },
+      { label: '5–6.4', count: 0 },
+      { label: '6.5–7.9', count: 0 },
+      { label: '8–8.9', count: 1 },
+      { label: '≥9', count: 0 },
+    ]);
     expect(dashboard.projects.find((project) => project.id === 'p1')).toMatchObject({
       total: 2, pass: 1, fail: 1, averageScore: 6,
     });

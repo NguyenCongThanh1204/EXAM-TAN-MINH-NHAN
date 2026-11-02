@@ -106,7 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (projectId && !z.string().uuid().safeParse(projectId).success)
         return res.status(400).json({ error: 'Bộ lọc công trình không hợp lệ.' });
       if (level.length > 100) return res.status(400).json({ error: 'Bộ lọc cấp bậc không hợp lệ.' });
-      if (scoreBucket && (!/^(?:[0-9]|10)$/.test(scoreBucket)))
+      if (scoreBucket && (!/^[0-4]$/.test(scoreBucket)))
         return res.status(400).json({ error: 'Bộ lọc điểm không hợp lệ.' });
 
       const levelOptions = [...new Set(attempts.map((attempt) => attempt.candidate_level?.trim() || 'Chưa khai báo'))]

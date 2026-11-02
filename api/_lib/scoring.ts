@@ -5,7 +5,12 @@ export function scoreOutOfTen(score: number | null, total: number | null): numbe
 
 export function scoreBucketOutOfTen(score: number | null, total: number | null): number | null {
   const normalized = scoreOutOfTen(score, total);
-  return normalized === null ? null : Math.min(10, Math.floor(normalized));
+  if (normalized === null) return null;
+  if (normalized < 5) return 0;
+  if (normalized < 6.5) return 1;
+  if (normalized < 8) return 2;
+  if (normalized < 9) return 3;
+  return 4;
 }
 
 export function passingScoreToPercentage(score: number): number {

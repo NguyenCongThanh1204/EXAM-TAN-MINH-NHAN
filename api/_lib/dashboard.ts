@@ -29,8 +29,7 @@ export type ExamDashboard = {
 };
 
 const SCORE_BUCKETS = [
-  '0.0–0.9', '1.0–1.9', '2.0–2.9', '3.0–3.9', '4.0–4.9', '5.0–5.9',
-  '6.0–6.9', '7.0–7.9', '8.0–8.9', '9.0–9.9', '10',
+  '<5', '5–6.4', '6.5–7.9', '8–8.9', '≥9',
 ];
 
 export function buildExamDashboard(attempts: DashboardAttempt[], projects: DashboardProject[]): ExamDashboard {
@@ -58,7 +57,8 @@ export function buildExamDashboard(attempts: DashboardAttempt[], projects: Dashb
     if (!totals) throw new Error('Dashboard metric accumulator is missing.');
     totals.score += score;
     metric.graded += 1;
-    metric.scoreDistribution[Math.min(10, Math.floor(score))].count += 1;
+    const bucketIndex = score < 5 ? 0 : score < 6.5 ? 1 : score < 8 ? 2 : score < 9 ? 3 : 4;
+    metric.scoreDistribution[bucketIndex].count += 1;
   };
   const finish = (metric: DashboardMetric) => {
     const totals = accumulators.get(metric);

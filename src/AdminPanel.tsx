@@ -326,7 +326,7 @@ function Import({ run }: { run: Run }) {
 
 type DashboardResponse = { dashboard: ExamDashboard; levelOptions: string[] };
 type DashboardGroup = { label: string; metric: DashboardMetric };
-const scoreLabels = ['0,0–0,9', '1,0–1,9', '2,0–2,9', '3,0–3,9', '4,0–4,9', '5,0–5,9', '6,0–6,9', '7,0–7,9', '8,0–8,9', '9,0–9,9', '10'];
+const scoreLabels = ['Dưới 5', '5–6,4', '6,5–7,9', '8–8,9', 'Từ 9 trở lên'];
 const countFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const scoreFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
@@ -375,7 +375,7 @@ function DashboardChart({ metric }: { metric: DashboardMetric }) {
             </div>
           ))}
         </div>
-        <p className="mt-2 text-xs text-slate-500">Mỗi khoảng rộng 1 điểm trên thang 10.</p>
+        <p className="mt-2 text-xs text-slate-500">Các khoảng: dưới 5; 5–6,4; 6,5–7,9; 8–8,9; từ 9 trở lên.</p>
       </section>
     </div>
   );
@@ -607,7 +607,7 @@ export default function Admin() {
       <header className="bg-gradient-to-r from-slate-900 to-teal-900 text-white">
         <div className="mx-auto max-w-4xl px-4 pt-6">
           <h1 className="text-xl font-semibold">Quản trị kỳ thi</h1>
-          <p className="text-sm text-teal-100/80">Cấu hình, mã mời, ngân hàng câu hỏi và kết quả</p>
+          <p className="text-sm text-teal-100/80">TÂN MINH NHÂN</p>
           <div role="tablist" aria-label="Mục quản trị" className="-mb-px mt-5 flex gap-1 overflow-x-auto">
             {TABS.map((t) => (
               <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}

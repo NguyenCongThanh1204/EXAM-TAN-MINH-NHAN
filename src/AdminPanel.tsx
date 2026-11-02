@@ -32,7 +32,7 @@ function Card({ id, title, desc, children }: { id: string; title: string; desc?:
   return (
     <section aria-labelledby={id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
       <h2 id={id} className="text-base font-semibold text-slate-900">{title}</h2>
-      {desc && <p className="mt-1 text-sm text-slate-500">{desc}</p>}
+      {/* {desc && <p className="mt-1 text-sm text-slate-500">{desc}</p>} */}
       <div className="mt-5 space-y-5">{children}</div>
     </section>
   );
@@ -91,7 +91,7 @@ function SettingsForm({ run }: { run: Run }) {
           <Field label="Thời lượng làm bài (phút)"><input type="number" min={1} max={600} className={inputCls} value={s.durationMinutes} onChange={(e) => set('durationMinutes', Number(e.target.value))} /></Field>
           <Field label="Số câu trắc nghiệm" ><input type="number" min={0} max={1000} className={inputCls} value={s.multipleChoiceCount} onChange={(e) => set('multipleChoiceCount', Number(e.target.value))} /></Field>
           <Field label="Số câu tự luận" ><input type="number" min={0} max={1000} className={inputCls} value={s.essayCount} onChange={(e) => set('essayCount', Number(e.target.value))} /></Field>
-          <Field label="Điểm đạt (thang 10)" hint="Ví dụ 7,5/10 tương đương ngưỡng 75%.">
+          <Field label="Điểm đạt (thang 10)">
             <input type="number" min={0.1} max={10} step={0.1} className={inputCls} value={s.passingScore}
               onChange={(e) => set('passingScore', Number(e.target.value))} />
           </Field>
@@ -300,7 +300,7 @@ function Import({ run }: { run: Run }) {
         <button disabled={!file} className={btnDark} onClick={() => void run(async () => setPv(await call(false)))}>Kiểm tra tệp</button>
         <button disabled={!file || !pv?.ok} className={btnPrimary} onClick={() => void commit()}>Lưu vào hệ thống</button>
       </div>
-      <p className="text-xs text-slate-500">Mỗi câu trắc nghiệm có 1 điểm nội bộ; hệ thống tự quy đổi tổng điểm về thang 10. Với 20 câu, mỗi câu đúng tương đương 0,5 điểm. Cột điểm trong mẫu chỉ nhập cho câu tự luận.</p>
+      {/* <p className="text-xs text-slate-500">Mỗi câu trắc nghiệm có 1 điểm nội bộ; hệ thống tự quy đổi tổng điểm về thang 10. Với 20 câu, mỗi câu đúng tương đương 0,5 điểm. Cột điểm trong mẫu chỉ nhập cho câu tự luận.</p> */}
       {saved !== null && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">Đã lưu {saved} câu hỏi.</p>}
       {pv && (
         <div className="space-y-3 text-sm">
@@ -544,7 +544,7 @@ function Results({ run }: { run: Run }) {
   return (
     <div className="space-y-6">
       <ResultsDashboard />
-      <Card id="res-export" title="Kết quả thi và hồ sơ phúc khảo" desc="Tải một file ZIP gồm bảng Excel và PDF riêng cho từng bài thi đã nộp. Trong file Excel, sheet Hồ sơ phúc khảo có liên kết đến PDF tương ứng.">
+      <Card id="res-export" title="Hồ sơ kết quả kiểm tra" desc="Tải một file ZIP gồm bảng Excel và PDF riêng cho từng bài thi đã nộp. Trong file Excel, sheet Hồ sơ phúc khảo có liên kết đến PDF tương ứng.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-semibold">Tải hồ sơ (giữ dữ liệu)</h3>

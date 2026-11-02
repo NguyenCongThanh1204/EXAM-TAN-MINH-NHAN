@@ -64,37 +64,25 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
     if (info.invitationRequired && !f.code.trim()) v.code = 'Nhập mã mời.';
     return v;
   };
-  async function go(e?: React.FormEvent, auto = false) {
+  async function go(e?: React.FormEvent) {
     e?.preventDefault();
     if (busy || waiting || closed) return;
     const v = validate();
     setFe(v); setErr('');
-    if (Object.keys(v).length) { if (auto) setErr('Đã đến giờ thi. Hãy điền đủ thông tin rồi bấm "Bắt đầu thi".'); return; }
+    if (Object.keys(v).length) return;
     setBusy(true);
     let fullscreenWarning = '';
     if (!document.fullscreenElement) {
-      if (auto) {
-        fullscreenWarning = 'Không thể tự bật toàn màn hình khi kỳ thi tự bắt đầu. Hãy nhấn F11 nếu cần.';
-      } else {
-        try {
-          await document.documentElement.requestFullscreen();
-        } catch {
-          fullscreenWarning = 'Không bật được toàn màn hình. Hãy nhấn F11 nếu muốn ẩn thanh trình duyệt và taskbar.';
-        }
+      try {
+        await document.documentElement.requestFullscreen();
+      } catch {
+        fullscreenWarning = 'Không bật được toàn màn hình. Hãy nhấn F11 nếu muốn ẩn thanh trình duyệt và taskbar.';
       }
     }
     try { await api('exam/start', { method: 'POST', body: JSON.stringify(f) }); onStarted(fullscreenWarning); }
     catch (x) { const a = x as ApiError; setErr(a.message); if (a.fields) setFe(Object.fromEntries(Object.entries(a.fields).map(([k, m]) => [k, m[0]]))); }
     finally { setBusy(false); }
   }
-  // Khi đếm ngược về 0 thì tự động bắt đầu (nếu thông tin đã điền đủ).
-  const goRef = useRef(go);
-  goRef.current = go;
-  const wasWaiting = useRef(waiting);
-  useEffect(() => {
-    if (wasWaiting.current && !waiting && info.active) void goRef.current(undefined, true);
-    wasWaiting.current = waiting;
-  }, [waiting, info.active]);
   const countdown = (() => {
     const s = Math.max(0, Math.ceil(msToOpen / 1000));
     const p = (n: number) => String(n).padStart(2, '0');
@@ -156,7 +144,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
       </section>
       <form onSubmit={go} noValidate className="h-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
         <div className="border-b border-blue-100 bg-gradient-to-r from-blue-50 to-white px-5 py-5 sm:px-6">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">THÔNG TIN THÍ SINH</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">THÔNG TIN NHÂN VIÊN</p>
           <h2 className="mt-1 text-xl font-bold text-slate-900">Vui lòng điền đầy đủ thông tin</h2>
         </div>
         <div className="space-y-4 p-5 sm:p-6">
@@ -179,14 +167,14 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
           {err && <p role="alert" className="text-sm text-red-700">{err}</p>}
           {waiting && info.active && (
             <p role="status" className="rounded-md bg-amber-50 p-3 text-center text-sm text-amber-900">
-              Chưa đến giờ thi. Kỳ thi mở sau <b className="font-mono text-base">{countdown}</b>. Hãy điền sẵn thông tin, bài thi sẽ tự động bắt đầu khi đến giờ.
+              Chưa đến giờ thi. Kỳ thi mở sau <b className="font-mono text-base">{countdown}</b>. Hãy điền sẵn thông tin; khi đến giờ, bạn có thể bắt đầu thi.
             </p>
           )}
           {closed && <p role="status" className="text-sm text-red-700">Kỳ thi đã kết thúc.</p>}
           <button disabled={busy || !info.active || waiting || closed || info.projects.length === 0} className="w-full rounded-md bg-blue-700 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">
             {busy ? 'Đang bắt đầu…' : waiting ? 'Chưa đến giờ thi' : 'Bắt đầu thi'}
           </button>
-          {!info.active && <p className="text-sm text-slate-600">Kỳ thi hiện chưa được kích hoạt.</p>}
+          {!info.active && <p className="text-sm text-slate-600">Bài kiểm tra hiện chưa được kích hoạt.</p>}
         </div>
       </form>
     </div>

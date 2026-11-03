@@ -10,7 +10,7 @@ import { buildResultsWorkbook } from '../_lib/workbook.js';
 import { buildReviewPdf, reviewPdfName } from '../_lib/review-pdf.js';
 import { appendZipEntry } from '../_lib/zip.js';
 import { parseRows, parseText } from '../_lib/import.js';
-import { buildExamDashboard } from '../_lib/dashboard.js';
+import { buildExamDashboard, buildTabSwitchSummary } from '../_lib/dashboard.js';
 import { passingScoreToPercentage, scoreBucketOutOfTen } from '../_lib/scoring.js';
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
@@ -90,10 +90,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         correct_count: number | null;
         incorrect_count: number | null;
         result: string | null;
+        submit_reason: string | null;
       }[] = [];
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await sb.from('exam_attempts')
-          .select('project_id,main_project,candidate_level,correct_count,incorrect_count,result')
+          .select('project_id,main_project,candidate_level,correct_count,incorrect_count,result,submit_reason')
           .neq('status', 'in_progress').order('id').range(offset, offset + pageSize - 1);
         if (error) throw error;
         attempts.push(...data);
@@ -111,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const levelOptions = [...new Set(attempts.map((attempt) => attempt.candidate_level?.trim() || 'Chưa khai báo'))]
         .sort((a, b) => a.localeCompare(b, 'vi'));
-      const filtered = attempts.filter((attempt) => {
+      const contextFiltered = attempts.filter((attempt) => {
         if (projectId && attempt.project_id !== projectId) return false;
         if (level && (attempt.candidate_level?.trim() || 'Chưa khai báo') !== level) return false;
         if (scoreBucket) {
@@ -121,7 +122,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return true;
       });
       return res.json({
-        dashboard: buildExamDashboard(filtered, projectRows),
+        dashboard: buildExamDashboard(contextFiltered, projectRows),
+        tabSwitchSummary: buildTabSwitchSummary(attempts),
         levelOptions,
       });
     }

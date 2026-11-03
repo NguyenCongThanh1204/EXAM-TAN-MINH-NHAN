@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildExamDashboard } from './dashboard.js';
+import { buildExamDashboard, buildTabSwitchSummary } from './dashboard.js';
 
 describe('buildExamDashboard', () => {
   it('aggregates pass, fail, pending, score distribution, project and level metrics', () => {
     const dashboard = buildExamDashboard([
-      { project_id: 'p1', main_project: 'Công trình A', candidate_level: 'Bậc 1', correct_count: 16, incorrect_count: 4, result: 'PASS' },
-      { project_id: 'p1', main_project: 'Công trình A', candidate_level: 'Bậc 1', correct_count: 8, incorrect_count: 12, result: 'FAIL' },
-      { project_id: 'p2', main_project: 'Công trình B', candidate_level: 'Bậc 2', correct_count: 0, incorrect_count: 0, result: null },
+      { project_id: 'p1', main_project: 'Công trình A', candidate_level: 'Bậc 1', correct_count: 16, incorrect_count: 4, result: 'PASS', submit_reason: 'tab_switch' },
+      { project_id: 'p1', main_project: 'Công trình A', candidate_level: 'Bậc 1', correct_count: 8, incorrect_count: 12, result: 'FAIL', submit_reason: 'tab_switch' },
+      { project_id: 'p2', main_project: 'Công trình B', candidate_level: 'Bậc 2', correct_count: 0, incorrect_count: 0, result: null, submit_reason: 'tab_switch' },
       { project_id: null, main_project: null, candidate_level: null, correct_count: null, incorrect_count: null, result: null },
     ], [
       { id: 'p1', name: 'Công trình A', active: true },
@@ -32,5 +32,13 @@ describe('buildExamDashboard', () => {
     expect(dashboard.levels.find((level) => level.level === 'Bậc 1')).toMatchObject({ total: 2, pass: 1, fail: 1 });
     expect(dashboard.levels.find((level) => level.level === 'Chưa khai báo')?.total).toBe(1);
     expect(dashboard.projectLevels).toHaveLength(2);
+  });
+
+  it('counts tab-switch violations across all submitted attempts', () => {
+    expect(buildTabSwitchSummary([
+      { project_id: null, main_project: null, candidate_level: null, correct_count: 10, incorrect_count: 0, result: 'PASS', submit_reason: 'tab_switch' },
+      { project_id: null, main_project: null, candidate_level: null, correct_count: 0, incorrect_count: 10, result: 'FAIL', submit_reason: 'manual' },
+      { project_id: null, main_project: null, candidate_level: null, correct_count: null, incorrect_count: null, result: null, submit_reason: 'tab_switch' },
+    ])).toEqual({ total: 3, violations: 2 });
   });
 });

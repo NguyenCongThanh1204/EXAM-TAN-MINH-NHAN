@@ -7,6 +7,7 @@ export type DashboardAttempt = {
   correct_count: number | null;
   incorrect_count: number | null;
   result: string | null;
+  submit_reason?: string | null;
 };
 
 export type DashboardProject = { id: string; name: string; active: boolean };
@@ -27,6 +28,7 @@ export type ExamDashboard = {
   levels: DashboardGroup<{ level: string }>[];
   projectLevels: DashboardGroup<{ projectId: string; level: string }>[];
 };
+export type TabSwitchSummary = { total: number; violations: number };
 
 const SCORE_BUCKETS = [
   '<5', '5–6.4', '6.5–7.9', '8–8.9', '≥9',
@@ -34,7 +36,8 @@ const SCORE_BUCKETS = [
 
 export function buildExamDashboard(attempts: DashboardAttempt[], projects: DashboardProject[]): ExamDashboard {
   const createMetric = (): DashboardMetric => ({
-    total: 0, pass: 0, fail: 0, pending: 0, graded: 0,
+    total: 0, pass: 0, fail: 0, pending: 0,
+    graded: 0,
     averageScore: null,
     scoreDistribution: SCORE_BUCKETS.map((label) => ({ label, count: 0 })),
   });
@@ -119,4 +122,11 @@ export function buildExamDashboard(attempts: DashboardAttempt[], projects: Dashb
     .sort((a, b) => a.level.localeCompare(b.level, 'vi'));
 
   return { overall: finish(overall), projects: projectsOut, levels: levelsOut, projectLevels };
+}
+
+export function buildTabSwitchSummary(attempts: DashboardAttempt[]): TabSwitchSummary {
+  return {
+    total: attempts.length,
+    violations: attempts.filter((attempt) => attempt.submit_reason === 'tab_switch').length,
+  };
 }

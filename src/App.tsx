@@ -18,7 +18,7 @@ type St = {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function Shell({ info, children }: { info: Info | null; children: React.ReactNode }) {
+function Shell({ info, children, compact = false }: { info: Info | null; children: React.ReactNode; compact?: boolean }) {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
@@ -28,12 +28,12 @@ function Shell({ info, children }: { info: Info | null; children: React.ReactNod
                 <img src={info.logoUrl} alt="Logo công ty" className="block h-12 w-auto max-w-36 object-contain" />
             </div>
           )}
-          <h1 className="absolute left-1/2 -translate-x-1/2 max-w-[65%] truncate text-center text-base font-bold tracking-wide text-slate-800 sm:text-xl">
+          <h1 className="absolute left-1/2 -translate-x-1/2 max-w-[65%] truncate text-center text-lg font-bold tracking-wide text-[#1F2944] sm:text-2xl">
               {info?.title ?? 'TÂN MINH NHÂN'}
           </h1>
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-4 py-6">
+      <main className={'mx-auto max-w-5xl px-4 ' + (compact ? 'py-3' : 'py-6')}>
         {children}
       </main>
     </div>
@@ -45,6 +45,8 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
   const [f, setF] = useState({ fullName: '', email: '', position: '', level: '', mainProject: '', code: '' });
   const [fe, setFe] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
+  const [rulesAccepted, setRulesAccepted] = useState(false);
+  const [acceptanceError, setAcceptanceError] = useState('');
   const [busy, setBusy] = useState(false);
   const offset = useRef(Date.parse(info.serverNow) - Date.now());
   const [now, setNow] = useState(() => Date.now() + offset.current);
@@ -69,7 +71,9 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
     if (busy || waiting || closed) return;
     const v = validate();
     setFe(v); setErr('');
-    if (Object.keys(v).length) return;
+    const acceptanceMessage = rulesAccepted ? '' : 'Vui lòng xác nhận đã đọc và đồng ý tuân thủ nội quy thi.';
+    setAcceptanceError(acceptanceMessage);
+    if (Object.keys(v).length || acceptanceMessage) return;
     setBusy(true);
     let fullscreenWarning = '';
     if (!document.fullscreenElement) {
@@ -91,92 +95,168 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
   })();
   const rules = [
     <>Điền <span className="font-semibold text-black">đầy đủ và chính xác</span> họ tên, email công ty (<span className="font-semibold text-black">@tanminhnhan.com.vn</span>), chức danh/vị trí, cấp bậc và công trình chính{info.invitationRequired ? ', cùng mã mời hợp lệ' : ''}.</>,
-    <>Kỳ thi mở từ {fmt(info.openingAt)} đến {fmt(info.closingAt)} (giờ Việt Nam). Thời gian làm bài <span className="font-semibold text-black">tối đa {info.durationMinutes} phút</span> kể từ lúc bắt đầu.</>,
+    <>Kỳ thi mở từ {fmt(info.openingAt)} đến {fmt(info.closingAt)} (giờ Việt Nam).</>,
     <>Trình duyệt sẽ yêu cầu mở <span className="font-semibold text-black">toàn màn hình</span> khi bắt đầu. Nếu không bật được, hãy nhấn <span className="font-semibold text-black">F11</span>.</>,
-    <><span className="font-semibold text-black">Không chuyển sang tab hoặc cửa sổ khác.</span> Nếu trang thi bị ẩn, bài thi sẽ <span className="font-semibold text-black">tự động được nộp</span>.</>,
+    <><span className="font-semibold text-red-700">Không chuyển sang tab hoặc cửa sổ khác.</span> Nếu trang thi bị ẩn, bài thi sẽ <span className="font-semibold text-black">tự động được nộp</span>.</>,
     // <>Khi <span className="font-semibold text-red-700">hết giờ hoặc đến giờ đóng kỳ thi</span>, bài sẽ <span className="font-semibold text-red-700">tự nộp</span>. Câu trắc nghiệm <span className="font-semibold text-red-700">chưa trả lời tính là sai</span>; câu tự luận do giám khảo chấm riêng. Điểm được hiển thị theo cài đặt của quản trị viên.</>,
   ];
   const field = (k: keyof typeof f, label: string, type = 'text', auto?: string) => (
     <div>
-      <label htmlFor={k} className="mb-1 block text-sm font-medium">{label}</label>
+      <label htmlFor={k} className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-700">
+        {label} <span className="text-red-500">*</span>
+      </label>
       <input id={k} type={type} autoComplete={auto} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}
         aria-invalid={!!fe[k]} aria-describedby={fe[k] ? k + '-e' : undefined}
-        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base" />
+        className="w-full rounded-lg border border-slate-300 bg-slate-50/70 px-3.5 py-1.5 text-base leading-6 transition-all placeholder:text-slate-400 focus:border-[#294075] focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
       {fe[k] && <p id={k + '-e'} className="mt-1 text-sm text-red-700">{fe[k]}</p>}
     </div>
   );
+  const examStatus = closed ? 'Đã kết thúc' : !info.active ? 'Chưa kích hoạt' : waiting ? 'Sắp mở thi' : 'Đang mở thi';
   return (
-    <div className="mx-auto grid max-w-5xl gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:items-stretch">
-      <section aria-labelledby="rules" className="h-full w-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
-        <div className="relative overflow-hidden bg-gradient-to-r from-blue-500 to-blue-800 px-5 py-6 text-white sm:px-6 sm:py-7">
+    <div className="mx-auto max-w-5xl space-y-4 lg:min-h-[calc(100vh-8rem)]">
+      {/* <section className="text-center">
+        <span className={'mb-3 inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-bold tracking-wide ' +
+          (closed || !info.active ? 'border-slate-200 bg-slate-100 text-slate-600' : waiting ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800')}>
+          <span className={'h-2 w-2 rounded-full ' +
+            (closed || !info.active ? 'bg-slate-400' : waiting ? 'bg-amber-500' : 'bg-emerald-500')} />
+          {examStatus}
+        </span>
+        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">CỔNG THI TRỰC TUYẾN</h1>
+        <p className="mx-auto mt-2 max-w-2xl text-sm leading-relaxed text-slate-600 sm:text-base">
+          {info.title || 'Vui lòng đọc nội quy và điền đầy đủ thông tin trước khi bắt đầu.'}
+        </p>
+      </section> */}
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
+      <section aria-labelledby="rules" className="w-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm lg:flex lg:flex-col">
+        <div className="relative min-h-[5rem] overflow-hidden bg-gradient-to-r from-[#294075] to-[#172554] px-5 py-3 text-white sm:min-h-[5rem] sm:px-6">
           <div aria-hidden="true" className="absolute -left-8 -top-10 h-40 w-40 rounded-full bg-white/10" />
-          <div className="relative flex items-center gap-4">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-11 w-11 shrink-0">
+          <div className="relative grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] items-center gap-3">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-10 w-10 shrink-0">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 11v2a2 2 0 0 0 2 2h2l9 4V5l-9 4H5a2 2 0 0 0-2 2Z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M7 15l1.5 5h3L10 16M19 9l2-2m-2 8 2 2" />
             </svg>
-            <div>
-              <h2 id="rules" className="text-xl font-bold sm:text-2xl">NỘI QUY LÀM BÀI THI</h2>
-              <p className="mt-1 text-sm text-blue-100 sm:text-base">Vui lòng đọc kỹ trước khi bắt đầu</p>
+            <div className="text-center">
+              <h2 id="rules" className="text-lg font-bold sm:text-xl">NỘI QUY LÀM BÀI THI</h2>
+              <p className="mt-0.5 text-xs text-blue-100 sm:text-sm">Vui lòng đọc kỹ trước khi bắt đầu</p>
             </div>
+            <div aria-hidden="true" />
           </div>
         </div>
-        <div className="bg-white px-5 py-6 sm:px-6 sm:py-7">
-          <ol className="space-y-5">
+        <div className="bg-white px-4 py-3 sm:px-5 sm:py-3 lg:flex lg:flex-1 lg:flex-col lg:justify-between">
+          <ol className="space-y-0.5">
             {rules.map((rule, index) => (
-              <li key={index} className="flex items-start gap-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-base font-bold text-white shadow-sm">
+              <li key={index} className={'flex items-start gap-2 rounded-xl border p-1 transition-colors ' +
+                (index === 3 ? 'border-red-200/70 bg-red-50/70' : 'border-transparent hover:border-slate-200/60 hover:bg-slate-50')}>
+                <span className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white shadow-sm ' +
+                  (index === 3 ? 'bg-[#D9232E] shadow-red-500/20' : 'bg-[#1B365D] shadow-slate-900/10')}>
                   {index + 1}
                 </span>
-                <p className="pt-0.5 text-sm leading-7 text-slate-800 sm:text-base">{rule}</p>
+                <p className={'pt-0.5 text-sm leading-5 ' + (index === 3 ? 'text-red-950' : 'text-slate-700')}>{rule}</p>
               </li>
             ))}
           </ol>
-          <footer className="mt-6 border-t border-blue-200 pt-4 text-center">
-            <p className="text-base font-semibold italic text-blue-700">Chúc bạn làm bài tốt!</p>
-            {/* <div className="mt-4 flex justify-center">
-              <svg aria-hidden="true" viewBox="0 0 24 24" fill="#FBBF24" stroke="currentColor" strokeWidth="1.5" className="h-12 w-12 text-amber-500">
+          <div className="mt-2 grid grid-cols-3 gap-1 border-y border-slate-100 py-1.5 text-center">
+            <div className="rounded-lg bg-slate-50 p-1">
+              <span className="block text-xs text-slate-500">Số câu hỏi</span>
+              <span className="text-sm font-bold text-slate-800">{info.multipleChoiceCount + info.essayCount} câu</span>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-1">
+              <span className="block text-xs text-slate-500">Thời lượng</span>
+              <span className="text-sm font-bold text-slate-800">{info.durationMinutes} phút</span>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-1">
+              <span className="block text-xs text-slate-500">Trạng thái</span>
+              <span className={'text-xs font-bold sm:text-sm ' +
+                (closed || !info.active ? 'text-slate-600' : waiting ? 'text-amber-800' : 'text-emerald-700')}>
+                {examStatus}
+              </span>
+            </div>
+          </div>
+          <footer className="mt-2 flex items-center justify-center gap-2 border-t border-blue-200 pt-1.5 text-center">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="#FBBF24" stroke="currentColor" strokeWidth="1.5" className="h-6 w-6 shrink-0 text-amber-500">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 4h8v5a4 4 0 0 1-8 0V4Zm0 2H5v2a4 4 0 0 0 4 4m7-6h3v2a4 4 0 0 1-4 4m-3 1v4m-4 3h8m-7-3h6" />
-              </svg>
-            </div> */}
+            </svg>
+            <p className="text-sm font-semibold italic text-[#172554]">Chúc bạn làm bài tốt!</p>
           </footer>
         </div>
       </section>
-      <form onSubmit={go} noValidate className="h-full overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
-        <div className="border-b border-blue-100 bg-gradient-to-r from-blue-50 to-white px-5 py-5 sm:px-6">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">THÔNG TIN NHÂN VIÊN</p>
-          <h2 className="mt-1 text-xl font-bold text-slate-900">Vui lòng điền đầy đủ thông tin</h2>
-        </div>
-        <div className="space-y-4 p-5 sm:p-6">
-          {field('fullName', 'Họ và tên', 'text', 'name')}
-          {field('email', 'Email công ty (@tanminhnhan.com.vn)', 'email', 'email')}
-          {field('position', 'Chức danh / vị trí')}
-          {field('level', 'Cấp bậc')}
-          <div>
-            <label htmlFor="mainProject" className="mb-1 block text-sm font-medium">Công trình chính</label>
-            <select id="mainProject" value={f.mainProject} onChange={(e) => setF({ ...f, mainProject: e.target.value })}
-              aria-invalid={!!fe.mainProject} aria-describedby={fe.mainProject ? 'mainProject-e' : undefined}
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base">
-              <option value="">-- Chọn công trình chính --</option>
-              {info.projects.map((project) => <option key={project.id} value={project.name}>{project.name}</option>)}
-            </select>
-            {fe.mainProject && <p id="mainProject-e" className="mt-1 text-sm text-red-700">{fe.mainProject}</p>}
-            {info.projects.length === 0 && <p className="mt-1 text-sm text-amber-700">Danh sách công trình chưa được cấu hình.</p>}
+      <form onSubmit={go} noValidate className="flex flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm">
+        <div className="flex min-h-[5rem] items-center gap-3 border-b border-blue-900/40 bg-gradient-to-r from-[#294075] to-[#172554] px-5 py-3 text-white sm:min-h-[5rem] sm:px-6">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 shadow-inner">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6 text-blue-200">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM12 14a7 7 0 0 0-7 7h14a7 7 0 0 0-7-7Z" />
+            </svg>
           </div>
-          {info.invitationRequired && field('code', 'Mã mời')}
-          {err && <p role="alert" className="text-sm text-red-700">{err}</p>}
-          {waiting && info.active && (
-            <p role="status" className="rounded-md bg-amber-50 p-3 text-center text-sm text-amber-900">
-              Chưa đến giờ thi. Kỳ thi mở sau <b className="font-mono text-base">{countdown}</b>. Hãy điền sẵn thông tin; khi đến giờ, bạn có thể bắt đầu thi.
+          <div>
+            <h2 className="text-lg font-bold tracking-tight sm:text-xl">THÔNG TIN NGƯỜI DỰ THI</h2>
+            <p className="mt-0.5 text-xs text-blue-200/80 sm:text-sm">Vui lòng điền đầy đủ và kiểm tra kỹ thông tin</p>
+          </div>
+        </div>
+        <div className="flex flex-1 flex-col justify-between p-3.5 sm:p-3">
+          <div className="space-y-1.5">
+            {field('fullName', 'Họ và tên', 'text', 'name')}
+            {field('email', 'Email công ty (@tanminhnhan.com.vn)', 'email', 'email')}
+            {field('position', 'Chức danh / vị trí')}
+            {field('level', 'Cấp bậc')}
+            <div>
+              <label htmlFor="mainProject" className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-700">
+                Công trình chính <span className="text-red-500">*</span>
+              </label>
+              <select id="mainProject" value={f.mainProject} onChange={(e) => setF({ ...f, mainProject: e.target.value })}
+                aria-invalid={!!fe.mainProject} aria-describedby={fe.mainProject ? 'mainProject-e' : undefined}
+                className="w-full rounded-lg border border-slate-300 bg-slate-50/70 px-3.5 py-1.5 text-base leading-6 transition-all focus:border-[#294075] focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100">
+                <option value="">-- Chọn công trình chính --</option>
+                {info.projects.map((project) => <option key={project.id} value={project.name}>{project.name}</option>)}
+              </select>
+              {fe.mainProject && <p id="mainProject-e" className="mt-1 text-sm text-red-700">{fe.mainProject}</p>}
+              {info.projects.length === 0 && <p className="mt-1 text-sm text-amber-700">Danh sách công trình chưa được cấu hình.</p>}
+            </div>
+            {info.invitationRequired && field('code', 'Mã mời')}
+            <div>
+              <label htmlFor="rulesAccepted" className={'flex cursor-pointer items-start gap-2.5 rounded-lg border p-2 text-sm leading-5 transition-colors ' +
+                (acceptanceError ? 'border-red-300 bg-red-50 text-red-900' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:bg-slate-50')}>
+                <input id="rulesAccepted" type="checkbox" checked={rulesAccepted}
+                  onChange={(e) => {
+                    setRulesAccepted(e.target.checked);
+                    if (e.target.checked) setAcceptanceError('');
+                  }}
+                  aria-required="true"
+                  aria-invalid={!!acceptanceError}
+                  aria-describedby={acceptanceError ? 'rulesAccepted-error' : undefined}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 accent-[#1B365D] focus:ring-[#1B365D]" />
+                <span>Tôi đã đọc, hiểu rõ và cam kết tuân thủ toàn bộ nội quy phòng thi.</span>
+              </label>
+              {acceptanceError && <p id="rulesAccepted-error" role="alert" className="mt-1 text-sm text-red-700">{acceptanceError}</p>}
+              {/* {!rulesAccepted && !acceptanceError && <p className="mt-1 text-xs text-slate-500">Cần xác nhận để bật nút bắt đầu thi.</p>} */}
+            </div>
+            {err && <p role="alert" className="text-sm text-red-700">{err}</p>}
+            {waiting && info.active && (
+              <p role="status" className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <span className="shrink-0 font-mono text-base font-bold">{countdown}</span>
+                <span>Chưa đến giờ thi. Bạn có thể điền sẵn thông tin và bắt đầu khi kỳ thi mở.</span>
+              </p>
+            )}
+            {closed && <p role="status" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">Kỳ thi đã kết thúc.</p>}
+            {!info.active && <p className="text-sm text-slate-600">Bài kiểm tra hiện chưa được kích hoạt.</p>}
+          </div>
+          <div className="mt-2 space-y-1.5">
+            <button disabled={busy || !info.active || waiting || closed || info.projects.length === 0 || !rulesAccepted}
+              className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#1B365D] px-6 py-2.5 text-base font-bold tracking-wide text-white shadow-md shadow-slate-900/10 transition-all hover:bg-[#10223D] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60">
+              <span>{busy ? 'ĐANG BẮT ĐẦU…' : waiting ? 'CHƯA ĐẾN GIỜ THI' : 'BẮT ĐẦU THI'}</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="h-5 w-5 transition-transform group-hover:translate-x-1">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0-7 7m7-7H3" />
+              </svg>
+            </button>
+            <p className="flex items-center justify-center gap-2 text-center text-[11px] font-medium text-slate-500">
+              <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-emerald-600">
+                <path fillRule="evenodd" d="M10 1.5 3 4v5c0 4.2 2.8 7.7 7 9.5 4.2-1.8 7-5.3 7-9.5V4l-7-2.5Zm3.2 6.8a.9.9 0 0 0-1.3-1.3L9 9.9 8.1 9a.9.9 0 1 0-1.3 1.3l1.6 1.6a.9.9 0 0 0 1.3 0l3.5-3.6Z" clipRule="evenodd" />
+              </svg>
+              Hệ thống sẽ tự động nộp bài nếu phát hiện rời khỏi màn hình thi.
             </p>
-          )}
-          {closed && <p role="status" className="text-sm text-red-700">Kỳ thi đã kết thúc.</p>}
-          <button disabled={busy || !info.active || waiting || closed || info.projects.length === 0} className="w-full rounded-md bg-blue-700 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">
-            {busy ? 'Đang bắt đầu…' : waiting ? 'Chưa đến giờ thi' : 'Bắt đầu thi'}
-          </button>
-          {!info.active && <p className="text-sm text-slate-600">Bài kiểm tra hiện chưa được kích hoạt.</p>}
+          </div>
         </div>
       </form>
+      </div>
     </div>
   );
 }
@@ -259,20 +339,17 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
   }, [onDone]);
 
   useEffect(() => {
-    const t = setInterval(() => { const r = remainingMs(deadline, offset.current, Date.now()); setLeft(r); if (r <= 0) void submit('deadline'); }, 500);
-    let blurTimer: number | undefined;
+    const t = setInterval(() => {
+      const r = remainingMs(deadline, offset.current, Date.now());
+      setLeft(r);
+      if (r <= 0) void submit('deadline');
+      else if (tabSwitchProtectionEnabled && (document.hidden || !document.hasFocus())) void submit('tab_switch');
+    }, 500);
     const vis = () => {
-      if (tabSwitchProtectionEnabled && document.visibilityState === 'hidden') {
-        window.clearTimeout(blurTimer);
-        void submit('tab_switch');
-      }
+      if (tabSwitchProtectionEnabled && document.visibilityState === 'hidden') void submit('tab_switch');
     };
     const blur = () => {
-      if (!tabSwitchProtectionEnabled) return;
-      window.clearTimeout(blurTimer);
-      blurTimer = window.setTimeout(() => {
-        if (document.visibilityState === 'hidden') void submit('tab_switch');
-      }, 300);
+      if (tabSwitchProtectionEnabled) void submit('tab_switch');
     };
     const blockClipboard = (e: Event) => e.preventDefault();
     const blockShortcuts = (e: KeyboardEvent) => {
@@ -305,7 +382,6 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     document.addEventListener('keydown', blockShortcuts, true);
     return () => {
       clearInterval(t);
-      window.clearTimeout(blurTimer);
       document.removeEventListener('visibilitychange', vis);
       window.removeEventListener('blur', blur);
       document.removeEventListener('copy', blockClipboard, true);
@@ -381,7 +457,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
       {fullscreenNotice && (
         <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           <span>{fullscreenNotice}</span>
-          <button type="button" onClick={() => void enableFullscreen()} className="rounded-md border border-amber-700 px-3 py-1.5 font-semibold text-amber-900 hover:bg-amber-100">
+          <button type="button" onClick={() => void enableFullscreen()} className="rounded-md border border-[#36796F] px-3 py-1.5 font-semibold text-[#36796F] hover:bg-[#EDF6F4]">
             Bật toàn màn hình
           </button>
         </div>
@@ -398,15 +474,15 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
           </div>
         </div>
       )}
-      <div className="mb-3 h-2 overflow-hidden rounded bg-sky-100" role="progressbar" aria-valuemin={0} aria-valuemax={qs.length} aria-valuenow={done}>
-        <div className="h-full bg-sky-600" style={{ width: (done / qs.length) * 100 + '%' }} />
+      <div className="mb-3 h-2 overflow-hidden rounded bg-[#EDF6F4]" role="progressbar" aria-valuemin={0} aria-valuemax={qs.length} aria-valuenow={done}>
+        <div className="h-full bg-[#0E794E]" style={{ width: (done / qs.length) * 100 + '%' }} />
       </div>
-      <p className="mb-4 text-sm text-blue-900">{all ? `Tổng ${qs.length} câu` : `Câu ${i + 1} / ${qs.length}`} · Đã trả lời {done}</p>
+      <p className="mb-4 text-sm text-[#35645F]">{all ? `Tổng ${qs.length} câu` : `Câu ${i + 1} / ${qs.length}`} · Đã trả lời {done}</p>
       <div className="grid gap-4 md:grid-cols-[1fr_220px]">
         <div className="min-w-0 space-y-4">
         {(all ? qs : [q]).map((q, n) => (
         <section key={q.id} id={'q-' + q.id} className="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-blue-700">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : `+${pointsPerQuestion} điểm`})</span></h2>
+          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-[#35645F]">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : `+${pointsPerQuestion} điểm`})</span></h2>
           {q.type === 'essay' ? (
             <label className="block">
               <span className="sr-only">Câu trả lời tự luận</span>
@@ -421,7 +497,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
                     save(q, { options: [], essay });
                   }
                 }}
-                className="w-full rounded-md border border-slate-300 p-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" placeholder="Nhập câu trả lời..." />
+                className="w-full rounded-md border border-slate-300 p-3 focus:border-[#299D8F] focus:outline-none focus:ring-2 focus:ring-[#EDF6F4]" placeholder="Nhập câu trả lời..." />
             </label>
           ) : (
             <fieldset className="space-y-2">
@@ -431,8 +507,8 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
               {q.options.map((o) => {
                 const checked = ans[q.id]?.options?.includes(o.id) ?? false;
                 return (
-                  <label key={o.id} className={'flex cursor-pointer items-start gap-3 rounded-md border border-slate-300 px-3 py-3 transition-colors ' + (checked ? 'bg-sky-100' : 'hover:bg-slate-50')}>
-                    <input type={q.type === 'multiple' ? 'checkbox' : 'radio'} name={q.id} checked={checked} onChange={() => pick(q, o)} className="mt-1 accent-blue-700" />
+                  <label key={o.id} className={'flex cursor-pointer items-start gap-3 rounded-md border border-slate-300 px-3 py-3 transition-colors ' + (checked ? 'bg-[#EDF6F4]' : 'hover:bg-slate-50')}>
+                    <input type={q.type === 'multiple' ? 'checkbox' : 'radio'} name={q.id} checked={checked} onChange={() => pick(q, o)} className="mt-1 accent-[#299D8F]" />
                     <span>{o.text}</span>
                   </label>
                 );
@@ -440,19 +516,19 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
             </fieldset>
           )}
           {!all && <div className="mt-5 flex justify-between">
-            <button disabled={i === 0} onClick={() => setI(i - 1)} className="rounded-md border border-slate-300 px-4 py-2 text-blue-800 hover:bg-slate-50 disabled:opacity-40">Câu trước</button>
+            <button disabled={i === 0} onClick={() => setI(i - 1)} className="rounded-md border border-slate-300 px-4 py-2 text-[#36796F] hover:bg-[#EDF6F4] disabled:opacity-40">Câu trước</button>
             {i < qs.length - 1
-              ? <button onClick={() => setI(i + 1)} className="rounded-md bg-blue-700 px-4 py-2 text-white hover:bg-blue-800">Câu sau</button>
-              : <button onClick={() => setConfirm(true)} className="rounded-md bg-blue-700 px-4 py-2 font-semibold text-white hover:bg-blue-800">Nộp bài</button>}
+              ? <button onClick={() => setI(i + 1)} className="rounded-md bg-[#36796F] px-4 py-2 text-white hover:bg-[#2F6A61]">Câu sau</button>
+              : <button onClick={() => setConfirm(true)} className="rounded-md bg-[#36796F] px-4 py-2 font-semibold text-white hover:bg-[#2F6A61]">Nộp bài</button>}
           </div>}
         </section>
         ))}
-        {all && <div className="flex justify-end"><button onClick={() => setConfirm(true)} className="rounded-md bg-blue-700 px-6 py-3 font-semibold text-white hover:bg-blue-800">Nộp bài</button></div>}
+        {all && <div className="flex justify-end"><button onClick={() => setConfirm(true)} className="rounded-md bg-[#36796F] px-6 py-3 font-semibold text-white hover:bg-[#2F6A61]">Nộp bài</button></div>}
         </div>
         <nav aria-label="Danh sách câu hỏi" className="order-first sticky top-2 z-20 self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm md:order-none md:top-4">
-        <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-center">
-          <span className="block text-xs font-medium text-blue-900">Thời gian còn lại</span>
-          <span className={'text-2xl font-bold tabular-nums ' + (left < 300000 ? 'text-red-700' : 'text-slate-900')}
+        <div className="mb-3 rounded-md bg-slate-50 px-3 py-2 text-center">
+          <span className="block text-xs font-medium text-[#1F2944]">Thời gian còn lại</span>
+          <span className={'text-2xl font-bold tabular-nums ' + (left < 300000 ? 'text-red-700' : 'text-[#1F2944]')}
             aria-label={`Còn ${mm} phút ${ss} giây`}>{mm}:{ss}</span>
         </div>
         <div className="grid grid-cols-5 gap-1.5">
@@ -461,15 +537,15 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
               const answered = answer && (answer.essay !== null ? !!answer.essay.trim() : answer.options.length > 0);
               return (
                 <button key={x.id} onClick={() => goTo(n)} aria-label={`Câu ${n + 1}${answered ? ', đã trả lời' : ', chưa trả lời'}`} aria-current={n === i}
-                  className={'rounded py-1.5 text-sm ' + (n === i ? 'ring-2 ring-blue-700 ' : '') + (answered ? 'bg-blue-700 text-white' : 'bg-sky-50 text-blue-900 hover:bg-sky-100')}>{n + 1}</button>
+                  className={'rounded py-1.5 text-sm ' + (n === i ? 'ring-2 ring-[#299D8F] ' : '') + (answered ? 'bg-[#36796F] text-white' : 'bg-[#f3f8f7] text-[#35645F] hover:bg-[#e6f1ef]')}>{n + 1}</button>
               );
             })}
           </div>
-          <button onClick={() => setConfirm(true)} className="mt-3 w-full rounded-md bg-blue-700 px-3 py-2 font-semibold text-white hover:bg-blue-800">Nộp bài</button>
+          <button onClick={() => setConfirm(true)} className="mt-3 w-full rounded-md bg-[#36796F] px-3 py-2 font-semibold text-white hover:bg-[#2F6A61]">Nộp bài</button>
         <p className={'mt-3 rounded-md px-3 py-2 text-center text-xs font-semibold leading-5 ' +
           (tabSwitchProtectionEnabled ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-900')}>
           {tabSwitchProtectionEnabled
-            ? 'Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu vi phạm.'
+            ? 'Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu trang bị ẩn hoặc cửa sổ mất focus.'
             : 'CHẾ ĐỘ THỬ ĐANG BẬT: chuyển tab sẽ không tự động nộp bài.'}
         </p>
         {reviewPdfBusy && <p role="status" className="mt-2 text-center text-xs text-slate-600">Đang xuất PDF đối chiếu…</p>}
@@ -482,8 +558,8 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
             <h2 id="cf" className="text-lg font-semibold">Nộp bài?</h2>
             <p className="mt-2 text-slate-700">Bạn đã trả lời {done}/{qs.length} câu. Sau khi nộp không thể sửa.</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button autoFocus onClick={() => setConfirm(false)} className="rounded-md border border-slate-300 px-4 py-2 text-blue-800 hover:bg-slate-50">Tiếp tục làm bài</button>
-              <button onClick={() => void submit('manual')} className="rounded-md bg-blue-700 px-4 py-2 font-semibold text-white hover:bg-blue-800">Nộp bài</button>
+              <button autoFocus onClick={() => setConfirm(false)} className="rounded-md border border-slate-300 px-4 py-2 text-[#36796F] hover:bg-[#EDF6F4]">Tiếp tục làm bài</button>
+              <button onClick={() => void submit('manual')} className="rounded-md bg-[#36796F] px-4 py-2 font-semibold text-white hover:bg-[#2F6A61]">Nộp bài</button>
             </div>
           </div>
         </div>
@@ -555,7 +631,7 @@ export default function App() {
     }
   };
   return (
-    <Shell info={info}>
+    <Shell info={info} compact={phase === 'entry'}>
       {phase === 'loading' && <p role="status">Đang tải…</p>}
       {phase === 'error' && <p role="alert" className="text-red-700">Không kết nối được máy chủ. <button className="underline" onClick={() => void load()}>Thử lại</button></p>}
       {phase === 'entry' && info && <Entry info={info} onStarted={(warning) => { setFullscreenWarning(warning); void load(); }} />}
@@ -566,7 +642,7 @@ export default function App() {
         setPhase('done');
       }} />}
       {phase === 'done' && (
-        <section className="mx-auto max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+        <section className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
           {tabSwitchNotice && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="tab-submit-notice"
               className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
@@ -575,39 +651,72 @@ export default function App() {
                 <h2 id="tab-submit-notice" className="mt-3 text-lg font-bold text-red-800">Bài thi đã được nộp tự động</h2>
                 <p className="mt-2 text-red-800">Bạn đã chuyển sang tab khác nên hệ thống đã tự động nộp bài.</p>
                 <button autoFocus onClick={() => setTabSwitchNotice(false)}
-                  className="mt-5 rounded-md bg-blue-700 px-5 py-2 font-semibold text-white transition-colors hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2">
+                  className="mt-5 rounded-md bg-[#294075] px-5 py-2 font-semibold text-white transition-colors hover:bg-[#172554] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#294075] focus-visible:ring-offset-2">
                   Đã hiểu
                 </button>
               </div>
             </div>
           )}
-          {!res && <p role="status" className="mb-3 rounded-lg bg-sky-50 px-3 py-2 text-sm font-semibold text-blue-800">Đã nộp bài thành công</p>}
-          <h2 className="text-xl font-semibold text-black">{res ? 'Bài thi đã được nộp' : 'Cảm ơn bạn đã tham gia bài kiểm tra'}</h2>
+          <div className="relative overflow-hidden bg-gradient-to-r from-[#294075] to-[#172554] px-6 py-7 text-center text-white sm:px-10 sm:py-9">
+            <div aria-hidden="true" className="absolute -right-10 -top-14 h-40 w-40 rounded-full bg-white/10" />
+            <div aria-hidden="true" className="absolute -bottom-16 left-8 h-36 w-36 rounded-full bg-white/5" />
+            <div className="relative">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-100">
+                {res ? 'BÀI THI ĐÃ HOÀN TẤT' : 'NỘP BÀI THÀNH CÔNG'}
+              </p>
+              <h2 className="mt-2 text-2xl font-bold sm:text-3xl">
+                {res ? 'Kết quả bài thi' : 'Cảm ơn bạn đã tham gia'}
+              </h2>
+              {info?.title && <p className="mt-2 text-sm text-blue-100 sm:text-base">{info.title}</p>}
+            </div>
+          </div>
+          <div className="px-5 py-6 sm:px-10 sm:py-8">
           {res ? (
             <>
-              <p className="mt-4 text-sm font-medium uppercase tracking-wide text-blue-700">Kết quả bài thi</p>
-              <p className={'mt-1 text-3xl font-bold ' + (res.result === 'PASS' ? 'text-blue-700' : 'text-red-700')}>{res.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}</p>
-              <p className="mt-2 text-2xl font-semibold text-blue-900">
-                Điểm trắc nghiệm: {res.correct + res.incorrect > 0 ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format((res.correct / (res.correct + res.incorrect)) * 10) : '—'} / 10
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className={'rounded-xl border p-5 ' + (res.result === 'PASS' ? 'border-blue-100 bg-blue-50' : 'border-red-100 bg-red-50')}>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Kết quả</p>
+                  <p className={'mt-2 text-3xl font-bold ' + (res.result === 'PASS' ? 'text-[#294075]' : 'text-red-700')}>
+                    {res.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Điểm trắc nghiệm</p>
+                  <p className="mt-2 text-3xl font-bold text-[#172554]">
+                    {res.correct + res.incorrect > 0
+                      ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format((res.correct / (res.correct + res.incorrect)) * 10)
+                      : '—'}
+                    <span className="ml-1 text-base font-medium text-slate-500">/ 10</span>
+                  </p>
+                </div>
+              </div>
+              <p className="mt-4 text-sm text-slate-600">
+                Đúng <b className="text-slate-800">{res.correct}</b> câu, sai hoặc bỏ trống <b className="text-slate-800">{res.incorrect}</b> câu.
+                Điểm được quy đổi theo số câu trắc nghiệm thực tế.
               </p>
-              <p className="mt-1 text-slate-600">Đúng {res.correct} câu, sai hoặc bỏ trống {res.incorrect} câu. Điểm mỗi câu đã được quy đổi theo số câu trắc nghiệm thực tế.</p>
             </>
-          ) : <p className="mt-3 text-lg font-semibold text-blue-800">{info?.title}</p>}
-          {st?.hasEssay && res && <p className="mt-4 rounded-md bg-sky-50 p-3 text-sm text-blue-900">
+          ) : (
+            <div role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-5 py-6 text-center">
+              <p className="text-lg font-semibold text-[#172554]">Đã nộp bài thành công</p>
+              <p className="mt-2 text-sm text-slate-600">Cảm ơn bạn đã hoàn thành bài kiểm tra.</p>
+            </div>
+          )}
+          {st?.hasEssay && res && <p className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-left text-sm leading-6 text-[#172554]">
             Điểm trắc nghiệm được hiển thị riêng trên thang 10; kết quả đạt/không đạt căn cứ theo tổng điểm bài thi, gồm cả phần tự luận.
           </p>}
           {/* <p className="mt-4 text-sm text-slate-600">File PDF chỉ chứa câu hỏi và lựa chọn/bài làm của bạn, không có đáp án chuẩn.</p> */}
           {exportError && <p role="alert" className="mt-3 text-sm text-red-700">{exportError}</p>}
           {resetError && <p role="alert" className="mt-4 text-sm text-red-700">{resetError}</p>}
-          <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button disabled={exportBusy} onClick={() => void downloadAnswerPdf()}
-              className="min-h-12 w-full rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              className="min-h-12 w-full rounded-lg bg-[#294075] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#172554] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#294075] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
               {exportBusy ? 'Đang xuất file…' : 'Tải bài làm (PDF)'}
             </button>
             <button disabled={resetBusy} onClick={() => void returnHome()}
-              className="min-h-12 w-full rounded-md bg-sky-100 px-3 py-2 text-sm font-semibold text-blue-900 transition-colors hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              className="min-h-12 w-full rounded-lg border border-blue-100 bg-white px-4 py-3 text-sm font-semibold text-[#172554] transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#294075] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
               {resetBusy ? 'Đang quay lại…' : 'Quay lại trang chủ'}
             </button>
+          </div>
           </div>
         </section>
       )}

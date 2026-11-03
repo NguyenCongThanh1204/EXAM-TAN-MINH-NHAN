@@ -324,7 +324,11 @@ function Import({ run }: { run: Run }) {
   );
 }
 
-type DashboardResponse = { dashboard: ExamDashboard; levelOptions: string[] };
+type DashboardResponse = {
+  dashboard: ExamDashboard;
+  levelOptions: string[];
+  tabSwitchSummary: { total: number; violations: number };
+};
 type DashboardGroup = { label: string; metric: DashboardMetric };
 const scoreLabels = ['Dưới 5', '5–6,4', '6,5–7,9', '8–8,9', 'Từ 9 trở lên'];
 const countFormat = new Intl.NumberFormat('vi-VN');
@@ -429,7 +433,7 @@ function ResultsDashboard() {
             {response?.levelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </Field>
-        <Field label="Khoảng điểm trắc nghiệm">
+        <Field label="Điểm trắc nghiệm">
           <select className={inputCls} value={scoreBucket} onChange={(e) => setScoreBucket(e.target.value)}>
             <option value="">Tất cả điểm</option>
             {scoreLabels.map((label, index) => <option key={label} value={index}>{label} điểm</option>)}
@@ -446,16 +450,25 @@ function ResultsDashboard() {
       {loading && !metric && <p role="status" className="text-sm text-slate-500">Đang tải thống kê…</p>}
       {metric && (
         <div aria-busy={loading} className="space-y-6">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {[
               { label: 'Tổng lượt đã nộp', value: countFormat.format(metric.total), color: 'text-slate-900' },
               { label: 'Đạt', value: countFormat.format(metric.pass), color: 'text-teal-700' },
               { label: 'Không đạt', value: countFormat.format(metric.fail), color: 'text-red-700' },
               { label: 'Điểm trắc nghiệm trung bình', value: displayScore(metric.averageScore), color: 'text-slate-900' },
+              {
+                label: 'Lượt vi phạm / tổng nộp (toàn kỳ thi)',
+                value: `${countFormat.format(response?.tabSwitchSummary.violations ?? 0)} / ${countFormat.format(response?.tabSwitchSummary.total ?? 0)}`,
+                detail: displayPercent(response?.tabSwitchSummary.total
+                  ? (response.tabSwitchSummary.violations / response.tabSwitchSummary.total) * 100
+                  : null),
+                color: 'text-amber-800',
+              },
             ].map((item) => (
               <div key={item.label} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-medium text-slate-500">{item.label}</p>
                 <p className={'mt-1 text-2xl font-bold ' + item.color}>{item.value}</p>
+                {'detail' in item && <p className="mt-1 text-xs text-slate-500">{item.detail} toàn bộ bài đã nộp</p>}
               </div>
             ))}
           </div>

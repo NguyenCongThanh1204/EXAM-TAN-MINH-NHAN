@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import { escapeCell } from './pure.js';
-import { reviewPdfName } from './review-pdf.js';
+import { adminResultPdfName } from './review-pdf.js';
 import { scoreOutOfTen } from './scoring.js';
 
 type Option = { id: string; text: string };
@@ -11,6 +11,8 @@ export type ExportAttempt = {
   correct_count: number | null; incorrect_count: number | null;
   scored_points: number | null; total_points: number | null; result: string | null;
   started_at: string; submitted_at: string | null; submit_reason?: string | null;
+  participant_order?: number | null;
+  participant_list_name?: string | null;
 };
 export type ExportQuestion = {
   id: string; question_text: string; options: Option[] | null;
@@ -38,6 +40,16 @@ const label = (options: Option[], id: string) => {
   const o = options.find((x) => x.id === id);
   return o ? `${id.toUpperCase()}. ${o.text}` : id.toUpperCase();
 };
+
+export function orderExportAttempts(attempts: ExportAttempt[]): ExportAttempt[] {
+  return [...attempts].sort((a, b) => {
+    const orderA = a.participant_order ?? Number.POSITIVE_INFINITY;
+    const orderB = b.participant_order ?? Number.POSITIVE_INFINITY;
+    return orderA - orderB
+      || Date.parse(a.started_at) - Date.parse(b.started_at)
+      || a.id.localeCompare(b.id);
+  });
+}
 
 function addSheet(wb: ExcelJS.Workbook, name: string, color: string, columns: { header: string; width: number }[]) {
   const ws = wb.addWorksheet(name, { properties: { tabColor: { argb: color } } });
@@ -112,8 +124,10 @@ export function buildResultsWorkbook(input: {
 
   const essayCol = (i: number) => essay.getColumn(i).letter;
   const essayIdCol = essayCol(2), essayMaxCol = essayCol(15), essayScoreCol = essayCol(16);
-  let mcNo = 0, essayNo = 0;
-  for (const a of input.attempts) {
+  let mcNo = 0;
+  for (const a of orderExportAttempts(input.attempts)) {
+    mcNo += 1;
+    const sequenceNumber = a.participant_order ?? mcNo;
     const who = [a.id, escapeCell(a.full_name), escapeCell(a.normalized_email)];
     const profile = [escapeCell(a.position), escapeCell(a.candidate_level), escapeCell(a.main_project)];
     const times = [vnDate(a.started_at), vnDate(a.submitted_at), durationDays(a.started_at, a.submitted_at)];
@@ -122,7 +136,7 @@ export function buildResultsWorkbook(input: {
     const score = scoreOutOfTen(correct, total);
     const essayCount = a.question_order.filter((id) => questionMap.get(id)?.question_type === 'essay').length;
     const row = mc.addRow([
-      ++mcNo, ...who, ...profile, ...times, total, correct, a.incorrect_count ?? Math.max(total - correct, 0),
+      sequenceNumber, ...who, ...profile, ...times, total, correct, a.incorrect_count ?? Math.max(total - correct, 0),
       score, total > 0 ? 10 : null, total > 0 ? correct / total : null,
       a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : total === 0 ? 'Không có trắc nghiệm' : '',
       essayCount > 0 ? { formula: `SUMIFS('Kết quả tự luận'!$${essayScoreCol}:$${essayScoreCol},'Kết quả tự luận'!$${essayIdCol}:$${essayIdCol},$B${mcNo + 1})`, result: 0 } : 'Không có',
@@ -133,9 +147,9 @@ export function buildResultsWorkbook(input: {
     const verdict = row.getCell(17);
     if (a.result === 'PASS') tone(verdict, 'ok'); else if (a.result === 'FAIL') tone(verdict, 'bad'); else tone(verdict, 'warn');
 
-    const reviewPath = `pdfs/${reviewPdfName(a, mcNo - 1)}`;
+    const reviewPath = `pdfs/${adminResultPdfName(a, sequenceNumber)}`;
     const reviewRow = review.addRow([
-      mcNo, ...who, ...profile, ...times, score,
+      sequenceNumber, ...who, ...profile, ...times, score,
       a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chưa có kết quả',
       { text: reviewPath, hyperlink: reviewPath },
     ]);
@@ -151,7 +165,7 @@ export function buildResultsWorkbook(input: {
       const answer = answerMap.get(`${a.id}:${questionId}`);
       if (q.question_type === 'essay') {
         const r = essay.addRow([
-          ++essayNo, ...who, ...profile, ...times, index + 1, escapeCell(q.question_text),
+        sequenceNumber, ...who, ...profile, ...times, index + 1, escapeCell(q.question_text),
           escapeCell(answer?.essay_response ?? ''), escapeCell(keyOf(q).reference_answer ?? ''), q.points, null, '',
         ]);
         r.getCell(8).numFmt = DATE_FORMAT; r.getCell(9).numFmt = DATE_FORMAT; r.getCell(10).numFmt = DURATION_FORMAT;

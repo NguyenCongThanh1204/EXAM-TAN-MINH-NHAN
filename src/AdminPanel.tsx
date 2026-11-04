@@ -15,10 +15,9 @@ type Preview = {
 type Run = (f: () => Promise<void>) => Promise<void>;
 type Settings = {
   title: string; openingAt: string; closingAt: string; durationMinutes: number;
-  multipleChoiceCount: number; essayCount: number; passingScore: number; invitationRequired: boolean; showScore: boolean;
+  multipleChoiceCount: number; essayCount: number; passingScore: number; showScore: boolean;
   displayMode: 'paged' | 'all'; active: boolean;
 };
-type ActiveCode = { limit: number; uses: number; createdAt: string } | null;
 type Project = { id: string; name: string; active: boolean };
 
 const toB64 = (f: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] ?? ''); r.onerror = () => rej(new Error('Không đọc được tệp.')); r.readAsDataURL(f); });
@@ -113,9 +112,8 @@ function SettingsForm({ run }: { run: Run }) {
       </Card>
 
       <Card id="cfg-access" title="Truy cập và kết quả">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Switch checked={s.active} onChange={(v) => set('active', v)} label="Mở kỳ thi" hint="Tắt để đóng ngay lập tức." />
-          <Switch checked={s.invitationRequired} onChange={(v) => set('invitationRequired', v)} label="Yêu cầu mã mời" hint="Thí sinh phải nhập mã." />
           <Switch checked={s.showScore} onChange={(v) => set('showScore', v)} label="Hiện điểm" hint="Hiện điểm trắc nghiệm sau khi nộp." />
         </div>
       </Card>
@@ -206,57 +204,137 @@ function Projects({ run }: { run: Run }) {
   );
 }
 
-function Codes({ run }: { run: Run }) {
+const MAX_PARTICIPANTS = 199;
+const COMPANY_EMAIL = /^[^\s@]+@tanminhnhan\.com\.vn$/i;
+
+function Participants({ run }: { run: Run }) {
   const { confirm, toast } = useUi();
-  const [limit, setLimit] = useState(300);
-  const [active, setActive] = useState<ActiveCode>(null);
-  const [code, setCode] = useState<string | null>(null);
-  const reload = () => api<{ active: ActiveCode }>('admin/codes').then((r) => setActive(r.active));
-  useEffect(() => { void reload().catch(() => undefined); }, []);
-  const create = async () => {
-    if (active && !(await confirm({
-      title: 'Tạo mã mời mới?', confirmText: 'Tạo mã mới', danger: true,
-      message: 'Mã hiện tại sẽ bị thu hồi. Thí sinh đang dùng mã cũ vẫn thi bình thường.',
+  const [allowedEmails, setAllowedEmails] = useState<string[] | null>(null);
+  const [rawEmails, setRawEmails] = useState('');
+  const [participantFile, setParticipantFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsedEmails = rawEmails.split(/[\s,;]+/)
+    .map((email) => email.replace(/^[\uFEFF"']+|["']+$/g, '').trim().toLowerCase())
+    .filter(Boolean);
+  const emails = [...new Set(parsedEmails)];
+  const invalidEmails = emails.filter((email) => email.length > 254 || !COMPANY_EMAIL.test(email));
+  const reload = () => api<{ emails: string[] }>('admin/participants').then((r) => setAllowedEmails(r.emails));
+  useEffect(() => { void reload().catch((e: Error) => toast('error', e.message)); }, [toast]);
+
+  const importList = () => void run(async () => {
+    const hasValidSource = participantFile
+      ? participantFile.size <= 256 * 1024
+      : emails.length > 0 && emails.length <= MAX_PARTICIPANTS && invalidEmails.length === 0;
+    if (allowedEmails === null || !hasValidSource) return;
+    const replacing = participantFile !== null;
+    if (replacing && allowedEmails.length > 0 && !(await confirm({
+      title: 'Thay danh sách người dự thi?',
+      message: 'Danh sách email hiện tại sẽ được thay hoàn toàn bằng danh sách mới.',
+      confirmText: 'Thay danh sách',
+      danger: true,
     }))) return;
-    void run(async () => {
-      const r = await api<{ code: string; limit: number }>('admin/codes', { method: 'POST', body: JSON.stringify({ limit }) });
-      setCode(r.code);
-      await reload();
-      toast('success', 'Đã tạo mã mời mới.');
-    });
+    setBusy(true);
+    try {
+      const result = await api<{ emails: string[]; count: number; added?: number }>(
+        replacing ? 'admin/participants-import' : 'admin/participants',
+        {
+          method: 'POST',
+          body: JSON.stringify(replacing
+            ? { file: await toB64(participantFile!) }
+            : { emails, mode: 'append' }),
+        },
+      );
+      setAllowedEmails(result.emails);
+      setRawEmails('');
+      setParticipantFile(null);
+      toast('success', replacing
+        ? `Đã thay danh sách bằng ${result.count} email.`
+        : `Đã thêm ${result.added ?? 0} email mới; danh sách hiện có ${result.count} email.`);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  const clearList = () => void run(async () => {
+    if (!allowedEmails?.length || !(await confirm({
+      title: 'Xóa danh sách email?',
+      message: 'Sau khi xóa, không email nào có thể bắt đầu bài thi.',
+      confirmText: 'Xóa danh sách',
+      danger: true,
+    }))) return;
+    setBusy(true);
+    try {
+      await api('admin/participants', { method: 'POST', body: JSON.stringify({ emails: [], mode: 'replace' }) });
+      setAllowedEmails([]);
+      toast('success', 'Đã xóa danh sách email.');
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  const readFile = async (file?: File) => {
+    if (!file) return;
+    if (file.size > 256 * 1024) {
+      setParticipantFile(null);
+      toast('error', 'Tệp Excel không được vượt quá 256 KB.');
+      return;
+    }
+    setRawEmails('');
+    setParticipantFile(file);
   };
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(code!); toast('success', 'Đã sao chép mã mời.'); }
-    catch { toast('error', 'Không sao chép được, hãy chọn và sao chép thủ công.'); }
-  };
-  const pct = active ? Math.min(100, Math.round((active.uses / active.limit) * 100)) : 0;
+
   return (
-    <Card id="codes" title="Mã mời dùng chung" desc="Chỉ có một mã hoạt động tại một thời điểm.">
-      {active ? (
-        <div className="rounded-xl bg-slate-50 p-4">
-          <div className="flex items-baseline justify-between text-sm">
-            <span className="text-slate-600">Đã dùng <b className="text-slate-900">{active.uses}</b> / <b className="text-slate-900">{active.limit}</b> lượt</span>
-            <span className="text-xs text-slate-500">Tạo lúc {new Date(active.createdAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
-          </div>
-          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-teal-600" style={{ width: pct + '%' }} /></div>
-        </div>
-      ) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Chưa có mã mời hoạt động.</p>}
+    <Card id="participants" title="Danh sách email người dự thi">
+      <p className="text-sm text-slate-600">
+        Chỉ email công ty có trong danh sách mới được bắt đầu thi. Dán email để bổ sung; import Excel sẽ thay toàn bộ danh sách. Mẫu Excel gồm cột Số thứ tự, Họ và tên và Email công ty; tên trong mẫu được dùng khi đặt tên PDF xuất từ admin. Tối đa {MAX_PARTICIPANTS} địa chỉ.
+      </p>
       <div className="flex flex-wrap items-end gap-3">
-        <Field label="Số người được dùng mã" className="w-48">
-          <input type="number" min={1} max={100000} value={limit} onChange={(e) => setLimit(Number(e.target.value))} className={inputCls} />
+        <Field label="Tệp danh sách Excel" className="min-w-64 flex-1">
+          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className={inputCls}
+            onChange={(e) => { void readFile(e.target.files?.[0]); e.currentTarget.value = ''; }} />
         </Field>
-        <button className={btnDark} onClick={() => void create()}>Tạo mã mới</button>
-        <button className={btnGhost} onClick={() => void run(reload)}>Làm mới</button>
+        <a href="/api/admin/participant-template" download="mau-danh-sach-email.xlsx" className={btnGhost}>
+          Tải mẫu Excel
+        </a>
       </div>
-      {code && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">Lưu mã ngay: mã chỉ hiển thị một lần.</p>
-          <div className="mt-2 flex gap-2">
-            <input readOnly value={code} aria-label="Mã mời" className="w-full rounded-lg border border-amber-300 bg-white p-2 text-center font-mono text-xl tracking-[0.3em]" />
-            <button className={btnPrimary} onClick={() => void copy()}>Sao chép</button>
+      {participantFile && <p className="text-sm text-teal-800">Đã chọn tệp: {participantFile.name}</p>}
+      <Field label="Hoặc dán email công ty">
+        <textarea rows={7} value={rawEmails} onChange={(e) => { setParticipantFile(null); setRawEmails(e.target.value); }}
+          placeholder={'ten.nguoidung@tanminhnhan.com.vn\nnguoi.dung2@tanminhnhan.com.vn'}
+          className={inputCls + ' font-mono'} />
+      </Field>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <p className={invalidEmails.length || emails.length > MAX_PARTICIPANTS ? 'text-red-700' : 'text-slate-600'}>
+          {participantFile
+            ? `Tệp Excel · tối đa ${MAX_PARTICIPANTS} email`
+            : `${emails.length} email duy nhất / tối đa ${MAX_PARTICIPANTS}${parsedEmails.length > emails.length ? ` · bỏ qua ${parsedEmails.length - emails.length} email trùng` : ''}${invalidEmails.length > 0 ? ` · ${invalidEmails.length} email không hợp lệ hoặc sai tên miền` : ''}`}
+        </p>
+        <button type="button" className={btnPrimary} disabled={busy || allowedEmails === null || (!participantFile && (!emails.length || emails.length > MAX_PARTICIPANTS || invalidEmails.length > 0))}
+          onClick={importList}>{busy ? 'Đang nhập…' : participantFile ? 'Thay danh sách bằng Excel' : 'Thêm email đã dán'}</button>
+      </div>
+      <div className="border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-slate-800">
+            {allowedEmails === null ? 'Đang tải danh sách…' : `Đã duyệt ${allowedEmails.length} / ${MAX_PARTICIPANTS} email`}
+          </h3>
+          <div className="flex gap-2">
+            <button type="button" className={btnGhost} disabled={busy || allowedEmails === null} onClick={() => void run(reload)}>Làm mới</button>
+            <button type="button" className={btnDanger} disabled={busy || !allowedEmails?.length} onClick={clearList}>Xóa danh sách</button>
           </div>
         </div>
-      )}
+        {allowedEmails?.length ? (
+          <ul className="mt-3 max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+            {allowedEmails.map((email, index) => (
+              <li key={email} className="flex gap-3 px-3 py-2 text-sm text-slate-700">
+                <span className="w-8 shrink-0 text-right text-slate-500">{index + 1}.</span>
+                <span>{email}</span>
+              </li>
+            ))}
+          </ul>
+        ) : allowedEmails !== null ? (
+          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Danh sách đang trống; hiện chưa email nào được phép bắt đầu thi.</p>
+        ) : null}
+      </div>
     </Card>
   );
 }
@@ -523,7 +601,7 @@ function Results({ run }: { run: Run }) {
   const downloadAndClear = async () => {
     const ok = await confirm({
       title: 'Tải hồ sơ rồi xóa dữ liệu kết quả?', confirmText: 'Tải và xóa', danger: true,
-      message: 'Toàn bộ lượt thi đã hoàn tất cùng câu trả lời và sự kiện liên quan sẽ bị xóa sau khi tải. Ngân hàng câu hỏi, cấu hình và lượt dùng mã mời được giữ nguyên.',
+      message: 'Toàn bộ lượt thi đã hoàn tất cùng câu trả lời và sự kiện liên quan sẽ bị xóa sau khi tải. Ngân hàng câu hỏi, cấu hình và danh sách email được giữ nguyên.',
     });
     if (!ok) return;
     setBusy(true);
@@ -583,7 +661,7 @@ function Results({ run }: { run: Run }) {
 
 const TABS = [
   { id: 'settings', label: 'Cấu hình' },
-  { id: 'codes', label: 'Mã mời' },
+  { id: 'participants', label: 'Danh sách email' },
   { id: 'questions', label: 'Câu hỏi' },
   { id: 'results', label: 'Kết quả' },
 ] as const;
@@ -631,7 +709,7 @@ export default function Admin() {
       </header>
       <main className="mx-auto max-w-4xl px-4 py-6" role="tabpanel">
         {tab === 'settings' && <div className="space-y-6"><SettingsForm run={run} /><Projects run={run} /></div>}
-        {tab === 'codes' && <Codes run={run} />}
+        {tab === 'participants' && <Participants run={run} />}
         {tab === 'questions' && <Import run={run} />}
         {tab === 'results' && <Results run={run} />}
       </main>

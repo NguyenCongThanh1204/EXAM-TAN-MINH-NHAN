@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { sb, sha256, hmac, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server.js';
+import { sb, sha256, newToken, ip, cookie, setCookie, clearCookie, limited, begin, fail } from '../_lib/server.js';
 import { isCompanyEmail, normalizeEmail } from '../_lib/pure.js';
 import { buildCandidatePdf, buildReviewPdf, candidatePdfName, reviewPdfName } from '../_lib/review-pdf.js';
 
@@ -11,7 +11,6 @@ const Start = z.object({
   position: z.string().trim().min(2).max(120),
   level: z.string().trim().min(1).max(120),
   mainProject: z.string().trim().min(1).max(200),
-  code: z.string().trim().max(32).optional(),
 });
 const Answer = z.object({
   questionId: z.string().uuid(),
@@ -21,7 +20,7 @@ const Answer = z.object({
 const Submit = z.object({ reason: z.enum(['manual', 'tab_switch', 'deadline']) });
 const ERR: Record<string, [number, string]> = {
   not_open: [403, 'Kỳ thi chưa mở.'], closed: [403, 'Kỳ thi đã đóng.'],
-  bad_code: [403, 'Mã mời không hợp lệ, đã hết lượt sử dụng hoặc đã bị thu hồi.'],
+  email_not_allowed: [403, 'Email chưa có trong danh sách được phép tham gia. Vui lòng liên hệ quản trị viên.'],
   email_used: [409, 'Email này đã được dùng để thi. Mỗi email chỉ được tham gia một lần.'],
   invalid_project: [400, 'Công trình đã chọn không hợp lệ hoặc không còn trong danh sách. Hãy tải lại trang và chọn lại.'],
   no_questions: [503, 'Chưa có câu hỏi nào đang hoạt động. Vui lòng báo quản trị viên kiểm tra ngân hàng câu hỏi.'],
@@ -44,15 +43,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'info' && req.method === 'GET') {
       const [{ data: s, error }, { data: projects, error: projectsError }] = await Promise.all([
-        sb.from('exam_settings').select('*').eq('id', 1).single(),
+        sb.from('exam_settings')
+          .select('title,logo_url,opening_at,closing_at,duration_minutes,mc_question_count,essay_question_count,active')
+          .eq('id', 1).single(),
         sb.from('exam_projects').select('id,name').eq('active', true).order('name'),
       ]);
       if (error) throw error;
       if (projectsError) throw projectsError;
       return res.json({ title: s.title, logoUrl: s.logo_url, openingAt: s.opening_at, closingAt: s.closing_at,
         durationMinutes: s.duration_minutes, multipleChoiceCount: s.mc_question_count, essayCount: s.essay_question_count,
-        invitationRequired: s.invitation_required, projects,
-        active: s.active, serverNow: new Date().toISOString() });
+        projects, active: s.active, serverNow: new Date().toISOString() });
     }
 
     if (action === 'start' && req.method === 'POST') {
@@ -60,17 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (await limited('start:' + A, 200, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' });
       const p = Start.safeParse(req.body);
       if (!p.success) return res.status(400).json({ error: 'Dữ liệu không hợp lệ.', fields: p.error.flatten().fieldErrors });
-      const { data: s } = await sb.from('exam_settings').select('invitation_required').eq('id', 1).single();
-      const code = p.data.code?.toUpperCase().replace(/[\s-]/g, '');
-      if (s?.invitation_required) {
-        if (!code) return res.status(400).json({ error: 'Vui lòng nhập mã mời.' });
-        if (await limited('code:' + A, 60, 600)) return res.status(429).json({ error: 'Quá nhiều lần thử mã.' });
-      }
       const token = newToken();
       const { error } = await sb.rpc('start_attempt', {
         p_name: p.data.fullName, p_email: normalizeEmail(p.data.email), p_position: p.data.position,
         p_level: p.data.level, p_main_project: p.data.mainProject,
-        p_token_hash: sha256(token), p_code_hash: code ? hmac(process.env.CODE_PEPPER!, code) : '',
+        p_token_hash: sha256(token),
       });
       if (error) {
         const k = Object.keys(ERR).find((x) => error.message.includes(x));

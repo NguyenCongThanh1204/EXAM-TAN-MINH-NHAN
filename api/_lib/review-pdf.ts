@@ -44,6 +44,13 @@ const safeFilenamePart = (value: string, fallback: string) => {
 export const reviewPdfName = (attempt: ExportAttempt, index: number) =>
   `${String(index + 1).padStart(4, '0')}_${safeFilenamePart(attempt.full_name, 'ThiSinh')}_${safeFilenamePart(attempt.main_project, 'CongTrinhChinh')}.pdf`;
 
+export const adminResultPdfName = (
+  attempt: Pick<ExportAttempt, 'full_name' | 'participant_list_name'>,
+  sequenceNumber: number,
+) => `${String(sequenceNumber).padStart(4, '0')}_${safeFilenamePart(
+  attempt.participant_list_name?.trim() || attempt.full_name, 'ThiSinh',
+)}.pdf`;
+
 const runFontName = (run: FontRun, bold: boolean) => `Tinos-${run.font}${bold ? '-Bold' : ''}`;
 
 function splitRuns(line: string): FontRun[] {

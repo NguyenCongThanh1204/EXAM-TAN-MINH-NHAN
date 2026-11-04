@@ -1,10 +1,50 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
-import { buildResultsWorkbook } from './workbook.js';
+import { buildResultsWorkbook, orderExportAttempts } from './workbook.js';
 
 const options = [{ id: 'a', text: 'Một' }, { id: 'b', text: 'Hai' }, { id: 'c', text: 'Ba' }];
 
 describe('buildResultsWorkbook', () => {
+  it('orders attempts by the imported participant sequence', () => {
+    const attempt = {
+      full_name: 'Candidate', normalized_email: 'candidate@x.com', position: 'KS', candidate_level: 'Cấp 1',
+      main_project: 'CT1', question_order: [], correct_count: 0, incorrect_count: 0,
+      scored_points: 0, total_points: 0, result: null, started_at: '2026-01-01T01:00:00Z',
+      submitted_at: '2026-01-01T01:30:00Z',
+    };
+    const ordered = orderExportAttempts([
+      { ...attempt, id: 'later', participant_order: 9 },
+      { ...attempt, id: 'earlier', participant_order: 2 },
+    ]);
+
+    expect(ordered.map((item) => item.id)).toEqual(['earlier', 'later']);
+  });
+
+  it('exports workbook rows and PDF links using the imported sequence', () => {
+    const attempt = {
+      full_name: 'Candidate', normalized_email: 'candidate@x.com', position: 'KS', candidate_level: 'Cấp 1',
+      main_project: 'CT1', question_order: [], correct_count: 0, incorrect_count: 0,
+      scored_points: 0, total_points: 0, result: null, started_at: '2026-01-01T01:00:00Z',
+      submitted_at: '2026-01-01T01:30:00Z',
+    };
+    const wb = buildResultsWorkbook({
+      attempts: [
+        { ...attempt, id: 'later', full_name: 'Later Candidate', participant_order: 9 },
+        {
+          ...attempt, id: 'earlier', full_name: 'Earlier Candidate',
+          participant_order: 2, participant_list_name: 'Tên trong Excel',
+        },
+      ],
+      questions: [],
+      answers: [],
+    });
+
+    expect(wb.getWorksheet('Kết quả trắc nghiệm')!.getRow(2).getCell(1).value).toBe(2);
+    expect(wb.getWorksheet('Kết quả trắc nghiệm')!.getRow(2).getCell(3).value).toBe('Earlier Candidate');
+    expect(wb.getWorksheet('Hồ sơ phúc khảo')!.getRow(2).getCell(13).value)
+      .toMatchObject({ hyperlink: 'pdfs/0002_Ten_trong_Excel.pdf' });
+  });
+
   it('tách sheet trắc nghiệm và tự luận, có thời gian làm bài', async () => {
     const wb = buildResultsWorkbook({
       attempts: [{
@@ -12,6 +52,7 @@ describe('buildResultsWorkbook', () => {
         main_project: 'CT1', question_order: ['q1', 'q2', 'q3'], correct_count: 2, incorrect_count: 0,
         scored_points: 2, total_points: 2, result: 'PASS',
         started_at: '2026-01-01T01:00:00Z', submitted_at: '2026-01-01T01:30:00Z',
+        participant_order: 7, participant_list_name: 'Tên trong mẫu',
       }],
       questions: [
         { id: 'q1', question_text: 'Q1', options, question_type: 'single', points: 1, question_keys: { correct_options: ['a'], reference_answer: null } },
@@ -36,6 +77,7 @@ describe('buildResultsWorkbook', () => {
     expect(headers.some((h) => h.includes('Thời gian làm bài'))).toBe(true);
     expect(headers.some((h) => h.includes('thang 10'))).toBe(true);
     expect(mc.getRow(2).values).toContain('Nguyen A');
+    expect(mc.getRow(2).getCell(1).value).toBe(7);
     expect(mc.getRow(2).getCell(14).value).toBe(10);
     expect(mc.getRow(2).getCell(15).value).toBe(10);
 
@@ -45,7 +87,8 @@ describe('buildResultsWorkbook', () => {
 
     const review = loaded.getWorksheet('Hồ sơ phúc khảo')!;
     expect(review.rowCount).toBe(2);
+    expect(review.getRow(2).getCell(1).value).toBe(7);
     expect(review.getRow(2).getCell(11).value).toBe(10);
-    expect((review.getRow(2).getCell(13).value as { hyperlink: string }).hyperlink).toBe('pdfs/0001_Nguyen_A_CT1.pdf');
+    expect((review.getRow(2).getCell(13).value as { hyperlink: string }).hyperlink).toBe('pdfs/0007_Ten_trong_mau.pdf');
   });
 });

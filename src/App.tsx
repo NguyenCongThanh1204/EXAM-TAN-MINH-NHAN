@@ -8,7 +8,7 @@ type AnswerValue = { options: string[]; essay: string | null };
 type Res = { correct: number; incorrect: number; scoredPoints: number; totalPoints: number; result: 'PASS' | 'FAIL' } | null;
 type Info = {
   title: string; logoUrl: string; openingAt: string; closingAt: string; durationMinutes: number;
-  multipleChoiceCount: number; essayCount: number; invitationRequired: boolean; active: boolean;
+  multipleChoiceCount: number; essayCount: number; active: boolean;
   serverNow: string; projects: { id: string; name: string }[];
 };
 type St = {
@@ -42,12 +42,13 @@ function Shell({ info, children, compact = false }: { info: Info | null; childre
 
 
 function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning: string) => void }) {
-  const [f, setF] = useState({ fullName: '', email: '', position: '', level: '', mainProject: '', code: '' });
+  const [f, setF] = useState({ fullName: '', email: '', position: '', level: '', mainProject: '' });
   const [fe, setFe] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
   const [rulesAccepted, setRulesAccepted] = useState(false);
   const [acceptanceError, setAcceptanceError] = useState('');
   const [busy, setBusy] = useState(false);
+  const emailInputRef = useRef<HTMLInputElement>(null);
   const offset = useRef(Date.parse(info.serverNow) - Date.now());
   const [now, setNow] = useState(() => Date.now() + offset.current);
   useEffect(() => { const t = setInterval(() => setNow(Date.now() + offset.current), 500); return () => clearInterval(t); }, []);
@@ -63,7 +64,6 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
     if (!f.level.trim()) v.level = 'Nhập cấp bậc.';
     if (!f.mainProject || !info.projects.some((project) => project.name === f.mainProject))
       v.mainProject = info.projects.length ? 'Chọn công trình chính trong danh sách.' : 'Danh sách công trình chưa được cấu hình. Vui lòng báo quản trị viên.';
-    if (info.invitationRequired && !f.code.trim()) v.code = 'Nhập mã mời.';
     return v;
   };
   async function go(e?: React.FormEvent) {
@@ -80,7 +80,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
       try {
         await document.documentElement.requestFullscreen();
       } catch {
-        fullscreenWarning = 'Không bật được toàn màn hình. Hãy nhấn F11 nếu muốn ẩn thanh trình duyệt và taskbar.';
+        fullscreenWarning = 'Không bật được toàn màn hình. Trong bài thi, hãy dùng nút “Bật toàn màn hình” để thử lại.';
       }
     }
     try { await api('exam/start', { method: 'POST', body: JSON.stringify(f) }); onStarted(fullscreenWarning); }
@@ -94,7 +94,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
     return `${d > 0 ? d + ' ngày ' : ''}${p(Math.floor((s % 86400) / 3600))}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
   })();
   const rules = [
-    <>Điền <span className="font-semibold text-black">đầy đủ và chính xác</span> họ tên, email công ty (<span className="font-semibold text-black">@tanminhnhan.com.vn</span>), chức danh/vị trí, cấp bậc và công trình chính{info.invitationRequired ? ', cùng mã mời hợp lệ' : ''}.</>,
+    <>Điền <span className="font-semibold text-black">đầy đủ và chính xác</span> họ tên, email công ty (<span className="font-semibold text-black">@tanminhnhan.com.vn</span>) có trong danh sách được duyệt, chức danh/vị trí, cấp bậc và công trình chính.</>,
     <>Kỳ thi mở từ {fmt(info.openingAt)} đến {fmt(info.closingAt)} (giờ Việt Nam).</>,
     <>Trình duyệt sẽ yêu cầu mở <span className="font-semibold text-black">toàn màn hình</span> khi bắt đầu. Nếu không bật được, hãy nhấn <span className="font-semibold text-black">F11</span>.</>,
     <><span className="font-semibold text-red-700">Không chuyển sang tab hoặc cửa sổ khác.</span> Nếu trang thi bị ẩn, bài thi sẽ <span className="font-semibold text-black">tự động được nộp</span>.</>,
@@ -105,9 +105,33 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
       <label htmlFor={k} className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-700">
         {label} <span className="text-red-500">*</span>
       </label>
-      <input id={k} type={type} autoComplete={auto} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}
-        aria-invalid={!!fe[k]} aria-describedby={fe[k] ? k + '-e' : undefined}
-        className="w-full rounded-lg border border-slate-300 bg-slate-50/70 px-3.5 py-1.5 text-base leading-6 transition-all placeholder:text-slate-400 focus:border-[#294075] focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100" />
+      <div className={k === 'email' ? 'flex' : undefined}>
+        <input ref={k === 'email' ? emailInputRef : undefined} id={k}
+          type={k === 'email' ? 'text' : type} inputMode={k === 'email' ? 'email' : undefined}
+          autoComplete={auto} value={f[k]}
+          onChange={(e) => setF({ ...f, [k]: e.target.value })}
+          aria-invalid={!!fe[k]} aria-describedby={fe[k] ? k + '-e' : undefined}
+          className={'w-full rounded-lg border border-slate-300 bg-slate-50/70 px-3.5 py-1.5 text-base leading-6 transition-all placeholder:text-slate-400 focus:border-[#294075] focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 ' +
+            (k === 'email' ? 'rounded-r-none' : '')} />
+        {k === 'email' && (
+          <button type="button" onClick={() => {
+            setF((current) => {
+              const localPart = current.email.trim().split('@')[0];
+              return { ...current, email: `${localPart}@tanminhnhan.com.vn` };
+            });
+            requestAnimationFrame(() => {
+              const input = emailInputRef.current;
+              if (!input) return;
+              const cursor = input.value.indexOf('@');
+              input.focus();
+              input.setSelectionRange(cursor, cursor);
+            });
+          }}
+            className="shrink-0 rounded-r-lg border border-l-0 border-slate-300 bg-slate-100 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200 focus:z-10 focus:outline-none focus:ring-2 focus:ring-blue-100">
+            @tanminhnhan.com.vn
+          </button>
+        )}
+      </div>
       {fe[k] && <p id={k + '-e'} className="mt-1 text-sm text-red-700">{fe[k]}</p>}
     </div>
   );
@@ -142,10 +166,10 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
             <div aria-hidden="true" />
           </div>
         </div>
-        <div className="bg-white px-4 py-3 sm:px-5 sm:py-3 lg:flex lg:flex-1 lg:flex-col lg:justify-between">
-          <ol className="space-y-0.5">
+        <div className="bg-white px-4 py-4 sm:px-5 sm:py-4 lg:flex lg:flex-1 lg:flex-col lg:justify-between">
+          <ol className="space-y-2">
             {rules.map((rule, index) => (
-              <li key={index} className={'flex items-start gap-2 rounded-xl border p-1 transition-colors ' +
+              <li key={index} className={'flex items-start gap-2 rounded-xl border p-2 transition-colors ' +
                 (index === 3 ? 'border-red-200/70 bg-red-50/70' : 'border-transparent hover:border-slate-200/60 hover:bg-slate-50')}>
                 <span className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white shadow-sm ' +
                   (index === 3 ? 'bg-[#D9232E] shadow-red-500/20' : 'bg-[#1B365D] shadow-slate-900/10')}>
@@ -155,16 +179,16 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
               </li>
             ))}
           </ol>
-          <div className="mt-2 grid grid-cols-3 gap-1 border-y border-slate-100 py-1.5 text-center">
-            <div className="rounded-lg bg-slate-50 p-1">
+          <div className="mt-3 grid grid-cols-3 gap-2 border-y border-slate-100 py-2 text-center">
+            <div className="rounded-lg bg-slate-50 p-2">
               <span className="block text-xs text-slate-500">Số câu hỏi</span>
               <span className="text-sm font-bold text-slate-800">{info.multipleChoiceCount + info.essayCount} câu</span>
             </div>
-            <div className="rounded-lg bg-slate-50 p-1">
+            <div className="rounded-lg bg-slate-50 p-2">
               <span className="block text-xs text-slate-500">Thời lượng</span>
               <span className="text-sm font-bold text-slate-800">{info.durationMinutes} phút</span>
             </div>
-            <div className="rounded-lg bg-slate-50 p-1">
+            <div className="rounded-lg bg-slate-50 p-2">
               <span className="block text-xs text-slate-500">Trạng thái</span>
               <span className={'text-xs font-bold sm:text-sm ' +
                 (closed || !info.active ? 'text-slate-600' : waiting ? 'text-amber-800' : 'text-emerald-700')}>
@@ -172,7 +196,7 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
               </span>
             </div>
           </div>
-          <footer className="mt-2 flex items-center justify-center gap-2 border-t border-blue-200 pt-1.5 text-center">
+          <footer className="mt-3 flex items-center justify-center gap-2 border-t border-blue-200 pt-2 text-center">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="#FBBF24" stroke="currentColor" strokeWidth="1.5" className="h-6 w-6 shrink-0 text-amber-500">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 4h8v5a4 4 0 0 1-8 0V4Zm0 2H5v2a4 4 0 0 0 4 4m7-6h3v2a4 4 0 0 1-4 4m-3 1v4m-4 3h8m-7-3h6" />
             </svg>
@@ -195,23 +219,22 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
         <div className="flex flex-1 flex-col justify-between p-3.5 sm:p-3">
           <div className="space-y-1.5">
             {field('fullName', 'Họ và tên', 'text', 'name')}
-            {field('email', 'Email công ty (@tanminhnhan.com.vn)', 'email', 'email')}
+            {field('email', 'Email công ty', 'email', 'email')}
             {field('position', 'Chức danh / vị trí')}
             {field('level', 'Cấp bậc')}
             <div>
               <label htmlFor="mainProject" className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-700">
-                Công trình chính <span className="text-red-500">*</span>
+                Địa điểm thi <span className="text-red-500">*</span>
               </label>
               <select id="mainProject" value={f.mainProject} onChange={(e) => setF({ ...f, mainProject: e.target.value })}
                 aria-invalid={!!fe.mainProject} aria-describedby={fe.mainProject ? 'mainProject-e' : undefined}
                 className="w-full rounded-lg border border-slate-300 bg-slate-50/70 px-3.5 py-1.5 text-base leading-6 transition-all focus:border-[#294075] focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100">
-                <option value="">-- Chọn công trình chính --</option>
+                <option value="">-- Chọn địa điểm thi --</option>
                 {info.projects.map((project) => <option key={project.id} value={project.name}>{project.name}</option>)}
               </select>
               {fe.mainProject && <p id="mainProject-e" className="mt-1 text-sm text-red-700">{fe.mainProject}</p>}
               {info.projects.length === 0 && <p className="mt-1 text-sm text-amber-700">Danh sách công trình chưa được cấu hình.</p>}
             </div>
-            {info.invitationRequired && field('code', 'Mã mời')}
             <div>
               <label htmlFor="rulesAccepted" className={'flex cursor-pointer items-start gap-2.5 rounded-lg border p-2 text-sm leading-5 transition-colors ' +
                 (acceptanceError ? 'border-red-300 bg-red-50 text-red-900' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:bg-slate-50')}>
@@ -286,7 +309,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
       await document.documentElement.requestFullscreen();
       setFullscreenNotice('');
     } catch {
-      setFullscreenNotice('Trình duyệt không bật được toàn màn hình. Bạn có thể nhấn F11.');
+      setFullscreenNotice('Trình duyệt không bật được toàn màn hình. Hãy kiểm tra quyền toàn màn hình hoặc thử lại bằng nút này.');
     }
   };
 
@@ -367,11 +390,24 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
         setTabSwitchProtectionEnabled((enabled) => !enabled);
         return;
       }
+      if (tabSwitchProtectionEnabled && document.fullscreenElement && (e.key === 'Escape' || e.key === 'F11')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'x', 'p'].includes(e.key.toLowerCase())) {
         e.preventDefault();
       }
     };
+    const handleFullscreenChange = () => {
+      if (document.fullscreenElement || !tabSwitchProtectionEnabled || sub.current) return;
+      setFullscreenNotice('Đang thử khôi phục toàn màn hình…');
+      void document.documentElement.requestFullscreen()
+        .then(() => setFullscreenNotice(''))
+        .catch(() => setFullscreenNotice('Trình duyệt đã thoát toàn màn hình. Hãy nhấn “Bật toàn màn hình” để tiếp tục.'));
+    };
     document.addEventListener('visibilitychange', vis);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     window.addEventListener('blur', blur);
     document.addEventListener('copy', blockClipboard, true);
     document.addEventListener('cut', blockClipboard, true);
@@ -383,6 +419,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     return () => {
       clearInterval(t);
       document.removeEventListener('visibilitychange', vis);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('blur', blur);
       document.removeEventListener('copy', blockClipboard, true);
       document.removeEventListener('cut', blockClipboard, true);
@@ -443,6 +480,21 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
   const mm = String(Math.floor(left / 60000)).padStart(2, '0'), ss = String(Math.floor((left % 60000) / 1000)).padStart(2, '0');
   return (
     <div className="select-none rounded-2xl bg-white p-3 sm:p-4">
+      {tabSwitchProtectionEnabled && !document.fullscreenElement && !sub.current && (
+        <div role="alertdialog" aria-modal="true" aria-labelledby="fullscreen-required"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 text-center shadow-2xl">
+            <h2 id="fullscreen-required" className="text-lg font-bold text-slate-900">Cần bật toàn màn hình</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Không thể tiếp tục làm bài khi đã thoát toàn màn hình. Hãy bật lại để tiếp tục.
+            </p>
+            <button type="button" onClick={() => void enableFullscreen()}
+              className="mt-5 rounded-md bg-[#294075] px-5 py-2 font-semibold text-white transition-colors hover:bg-[#172554] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#294075] focus-visible:ring-offset-2">
+              Bật lại toàn màn hình
+            </button>
+          </div>
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="text-sm">
           <span className="font-medium">{st.candidate?.fullName}</span> · {st.candidate?.position}
@@ -545,8 +597,8 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
         <p className={'mt-3 rounded-md px-3 py-2 text-center text-xs font-semibold leading-5 ' +
           (tabSwitchProtectionEnabled ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-900')}>
           {tabSwitchProtectionEnabled
-            ? 'Nội quy: Nghiêm cấm chuyển tab hoặc cửa sổ khác. Bài thi sẽ tự động nộp nếu trang bị ẩn hoặc cửa sổ mất focus.'
-            : 'CHẾ ĐỘ THỬ ĐANG BẬT: chuyển tab sẽ không tự động nộp bài.'}
+                ? 'Nội quy: Không chuyển tab/cửa sổ hoặc thoát toàn màn hình. Bài thi tự nộp nếu vi phạm.'
+                : 'CHẾ ĐỘ THỬ ĐANG BẬT: chuyển tab không tự động nộp bài và có thể thoát toàn màn hình.'}
         </p>
         {reviewPdfBusy && <p role="status" className="mt-2 text-center text-xs text-slate-600">Đang xuất PDF đối chiếu…</p>}
         {reviewPdfError && <p role="alert" className="mt-2 text-center text-xs text-red-700">{reviewPdfError}</p>}
@@ -578,6 +630,7 @@ export default function App() {
   const [exportBusy, setExportBusy] = useState(false);
   const [tabSwitchNotice, setTabSwitchNotice] = useState(false);
   const [fullscreenWarning, setFullscreenWarning] = useState('');
+  const [fullscreenExitError, setFullscreenExitError] = useState('');
   const [phase, setPhase] = useState<'loading' | 'entry' | 'exam' | 'done' | 'error'>('loading');
   const load = useCallback(async () => {
     try {
@@ -589,6 +642,12 @@ export default function App() {
     } catch { setPhase('error'); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (phase !== 'done' || !document.fullscreenElement) return;
+    void document.exitFullscreen()
+      .then(() => setFullscreenExitError(''))
+      .catch(() => setFullscreenExitError('Bài đã nộp nhưng trình duyệt không tự tắt được toàn màn hình.'));
+  }, [phase]);
   const returnHome = async () => {
     setResetBusy(true);
     setResetError('');
@@ -597,6 +656,7 @@ export default function App() {
       setSt(null);
       setRes(null);
       setTabSwitchNotice(false);
+      setFullscreenExitError('');
       setPhase('entry');
     } catch (e) {
       setResetError((e as Error).message);
@@ -643,6 +703,7 @@ export default function App() {
       }} />}
       {phase === 'done' && (
         <section className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+          {fullscreenExitError && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">{fullscreenExitError}</p>}
           {tabSwitchNotice && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="tab-submit-notice"
               className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">

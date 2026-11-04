@@ -2,12 +2,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { ZipArchive } from 'archiver';
 import type { Archiver } from 'archiver';
 import ExcelJS from 'exceljs';
-import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { sb, hmac, safeEq, ip, cookie, setCookie, limited, begin, fail } from '../_lib/server.js';
-import { escapeCell } from '../_lib/pure.js';
-import { buildResultsWorkbook } from '../_lib/workbook.js';
-import { buildReviewPdf, reviewPdfName } from '../_lib/review-pdf.js';
+import { escapeCell, isCompanyEmail, normalizeEmail } from '../_lib/pure.js';
+import { buildResultsWorkbook, orderExportAttempts } from '../_lib/workbook.js';
+import { adminResultPdfName, buildReviewPdf } from '../_lib/review-pdf.js';
 import { appendZipEntry } from '../_lib/zip.js';
 import { parseRows, parseText } from '../_lib/import.js';
 import { buildExamDashboard, buildTabSwitchSummary } from '../_lib/dashboard.js';
@@ -15,8 +14,6 @@ import { passingScoreToPercentage, scoreBucketOutOfTen } from '../_lib/scoring.j
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
 
-const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-const genCode = () => { let s = ''; while (s.length < 10) for (const b of randomBytes(16)) if (b < 248 && s.length < 10) s += ALPHABET[b % 31]; return s; };
 // Lịch thi nhập/hiển thị theo giờ Việt Nam (cố định +07:00, khớp timezone của exam_settings).
 const VN_OFFSET = '+07:00';
 const LOCAL_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
@@ -29,7 +26,6 @@ const SettingsIn = z.object({
   essayCount: z.number().int().min(0).max(1000),
   passingScore: z.number().min(0.1).max(10)
     .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-8, 'Điểm đạt tối đa một chữ số thập phân.'),
-  invitationRequired: z.boolean(),
   showScore: z.boolean(),
   displayMode: z.enum(['paged', 'all']),
   active: z.boolean(),
@@ -40,7 +36,7 @@ const SettingsIn = z.object({
 type SettingsRow = {
   title: string; opening_at: string; closing_at: string; duration_minutes: number;
   question_count: number; mc_question_count: number; essay_question_count: number;
-  passing_percentage: number; invitation_required: boolean; show_score: boolean; active: boolean;
+  passing_percentage: number; show_score: boolean; active: boolean;
   display_mode?: 'paged' | 'all';
 };
 const toLocal = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 16);
@@ -48,19 +44,42 @@ const settingsOut = (s: SettingsRow) => ({
   title: s.title, openingAt: toLocal(s.opening_at), closingAt: toLocal(s.closing_at),
   durationMinutes: s.duration_minutes, multipleChoiceCount: s.mc_question_count, essayCount: s.essay_question_count,
   passingScore: s.passing_percentage / 10,
-  invitationRequired: s.invitation_required, showScore: s.show_score, displayMode: s.display_mode ?? 'paged', active: s.active,
+  showScore: s.show_score, displayMode: s.display_mode ?? 'paged', active: s.active,
 });
 const adminOk = (req: VercelRequest) => {
   const t = cookie(req, 'admin'); if (!t) return false;
   const [exp, sig] = t.split('.');
   return Number(exp) > Date.now() && !!sig && safeEq(sig, hmac(process.env.ADMIN_AUTH_SECRET!, exp));
 };
+const ParticipantEmails = z.array(z.string().trim().email().max(254)).max(199);
+function parseParticipantEmails(values: unknown): string[] | null {
+  const parsed = ParticipantEmails.safeParse(values);
+  if (!parsed.success) return null;
+  const emails = [...new Set(parsed.data.map(normalizeEmail))];
+  if (emails.some((email) => !isCompanyEmail(email))) return null;
+  return emails;
+}
+async function replaceParticipantEmails(emails: string[]) {
+  const { error } = await sb.rpc('replace_participant_email_allowlist', { p_emails: emails });
+  if (error) throw error;
+}
+async function replaceParticipantEntries(emails: string[], names: (string | null)[]) {
+  const { error } = await sb.rpc('replace_participant_email_allowlist_with_names', {
+    p_emails: emails,
+    p_names: names,
+  });
+  if (error) throw error;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const rid = begin(req, res, req.query.action === 'import' ? 4_500_000 : 16_384);
+  const requestAction = String(req.query.action);
+  const maxBytes = requestAction === 'import' ? 4_500_000
+    : requestAction === 'participants-import' ? 360 * 1024
+      : requestAction === 'participants' ? 64 * 1024 : 16_384;
+  const rid = begin(req, res, maxBytes);
   if (!rid) return;
   try {
-    const action = String(req.query.action);
+    const action = requestAction;
     if (action === 'login' && req.method === 'POST') {
       if (await limited('admin:' + ip(req), 5, 60)) return res.status(429).json({ error: 'Quá nhiều lần thử.' });
       const p = z.object({ password: z.string().max(200) }).safeParse(req.body);
@@ -71,6 +90,145 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ ok: true });
     }
     if (!adminOk(req)) return res.status(401).json({ error: 'Chưa xác thực.' });
+
+    if (action === 'participants' && req.method === 'GET') {
+      const { data, error } = await sb.from('participant_email_allowlist').select('email').order('sequence_number');
+      if (error) throw error;
+      return res.json({ emails: data.map((row) => row.email) });
+    }
+    if (action === 'participants' && req.method === 'POST') {
+      const p = z.object({
+        emails: ParticipantEmails,
+        mode: z.enum(['append', 'replace']),
+      }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Danh sách phải có tối đa 199 email hợp lệ.' });
+      const emails = parseParticipantEmails(p.data.emails);
+      if (!emails) return res.status(400).json({ error: 'Chỉ chấp nhận tối đa 199 email công ty @tanminhnhan.com.vn hợp lệ.' });
+      if (p.data.mode === 'replace') {
+        await replaceParticipantEmails(emails);
+        return res.json({ emails, count: emails.length });
+      }
+
+      const { data: added, error } = await sb.rpc('append_participant_email_allowlist', { p_emails: emails });
+      if (error?.message.includes('participant_limit'))
+        return res.status(409).json({ error: 'Danh sách tối đa 199 email; email mới vượt quá giới hạn này.' });
+      if (error) throw error;
+      const { data, error: listError } = await sb.from('participant_email_allowlist')
+        .select('email').order('sequence_number');
+      if (listError) throw listError;
+      return res.json({ emails: data.map((row) => row.email), count: data.length, added });
+    }
+    if (action === 'participant-template' && req.method === 'GET') {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Danh sách email');
+      sheet.columns = [
+        { header: 'Số thứ tự', key: 'number', width: 16 },
+        { header: 'Họ và tên', key: 'name', width: 32 },
+        { header: 'Email công ty', key: 'email', width: 42 },
+      ];
+      sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } };
+      sheet.getCell('A1').note = 'Đánh số thứ tự liên tục từ 1.';
+      sheet.getCell('B1').note = 'Nhập họ tên thí sinh, tối đa 120 ký tự.';
+      sheet.getCell('C1').note = 'Nhập tối đa 199 email công ty, mỗi dòng một địa chỉ. Ví dụ: ten.nguoidung@tanminhnhan.com.vn.';
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="mau-danh-sach-email.xlsx"');
+      return res.status(200).send(buffer);
+    }
+    if (action === 'participants-import' && req.method === 'POST') {
+      const p = z.object({ file: z.string().min(1).max(350_000) }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Tệp Excel không hợp lệ hoặc vượt quá dung lượng cho phép.' });
+      const buffer = Buffer.from(p.data.file, 'base64');
+      if (buffer.length < 4 || buffer.length > 256 * 1024 || buffer[0] !== 0x50 || buffer[1] !== 0x4b)
+        return res.status(400).json({ error: 'Chỉ hỗ trợ tệp Excel .xlsx tối đa 256 KB.' });
+
+      const workbook = new ExcelJS.Workbook();
+      try {
+        await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+      } catch {
+        return res.status(400).json({ error: 'Không đọc được tệp Excel. Hãy tải mẫu và nhập lại.' });
+      }
+      const sheet = workbook.worksheets[0];
+      if (!sheet) return res.status(400).json({ error: 'Tệp Excel không có trang tính danh sách email.' });
+
+      const participantRows: { email: string; name: string | null }[] = [];
+      let invalidLayout = false;
+      let layout: 'email-only' | 'numbered' | 'named' | null = null;
+      let sequence = 0;
+      sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        const cells: { column: number; value: string }[] = [];
+        row.eachCell({ includeEmpty: false }, (cell, column) => {
+          const value = String(cell.text ?? '').trim();
+          if (value) cells.push({ column, value });
+        });
+        if (!cells.length) return;
+        const headers = cells.map((cell) => cell.value.toLowerCase());
+        if (rowNumber === 1 && cells.length === 1 && cells[0].column === 1
+          && ['email', 'email công ty'].includes(headers[0])) {
+          layout = 'email-only';
+          return;
+        }
+        if (rowNumber === 1 && cells.length === 2 && cells[0].column === 1 && cells[1].column === 2
+          && ['số thứ tự', 'stt'].includes(headers[0])
+          && ['email', 'email công ty'].includes(headers[1])) {
+          layout = 'numbered';
+          return;
+        }
+        if (rowNumber === 1 && cells.length === 3
+          && cells[0].column === 1 && cells[1].column === 2 && cells[2].column === 3
+          && ['số thứ tự', 'stt'].includes(headers[0])
+          && ['họ và tên', 'họ tên', 'tên thí sinh', 'tên'].includes(headers[1])
+          && ['email', 'email công ty'].includes(headers[2])) {
+          layout = 'named';
+          return;
+        }
+        if (!layout) {
+          if (cells.length === 1 && cells[0].column === 1) layout = 'email-only';
+          else if (cells.length === 2 && cells[0].column === 1 && cells[1].column === 2) layout = 'numbered';
+          else if (cells.length === 3 && cells[0].column === 1 && cells[1].column === 2 && cells[2].column === 3)
+            layout = 'named';
+        }
+        if (layout === 'named' && cells.length === 3
+          && cells[0].column === 1 && cells[1].column === 2 && cells[2].column === 3) {
+          sequence += 1;
+          if (!Number.isInteger(Number(cells[0].value)) || Number(cells[0].value) !== sequence
+            || cells[1].value.length > 120) {
+            invalidLayout = true;
+            return;
+          }
+          participantRows.push({ name: cells[1].value, email: cells[2].value });
+          return;
+        }
+        if (layout === 'numbered' && cells.length === 2 && cells[0].column === 1 && cells[1].column === 2) {
+          sequence += 1;
+          if (!Number.isInteger(Number(cells[0].value)) || Number(cells[0].value) !== sequence) {
+            invalidLayout = true;
+            return;
+          }
+          participantRows.push({ name: null, email: cells[1].value });
+          return;
+        }
+        if (layout !== 'email-only' || cells.length !== 1 || cells[0].column !== 1) {
+          invalidLayout = true;
+          return;
+        }
+        participantRows.push({ name: null, email: cells[0].value });
+      });
+      if (invalidLayout) return res.status(400).json({ error: 'Mẫu cần có các cột STT, Họ và tên, Email công ty theo đúng định dạng.' });
+      if (participantRows.length === 0) return res.status(400).json({ error: 'Tệp Excel chưa có email nào.' });
+      if (participantRows.length > 199) return res.status(400).json({ error: 'Danh sách chỉ được có tối đa 199 email.' });
+      const emails = parseParticipantEmails(participantRows.map((row) => row.email));
+      if (!emails) return res.status(400).json({ error: 'Email trong tệp phải là địa chỉ công ty @tanminhnhan.com.vn hợp lệ.' });
+      const nameByEmail = new Map<string, string | null>();
+      for (const row of participantRows) {
+        const email = normalizeEmail(row.email);
+        if (!nameByEmail.has(email)) nameByEmail.set(email, row.name);
+      }
+      await replaceParticipantEntries(emails, emails.map((email) => nameByEmail.get(email) ?? null));
+      return res.json({ emails, count: emails.length });
+    }
 
     if (action === 'projects' && req.method === 'GET') {
       const { data, error } = await sb.from('exam_projects').select('id,name,active').order('name');
@@ -167,26 +325,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!data) return res.status(404).json({ error: 'Không tìm thấy công trình.' });
       return res.json(data);
     }
-    if (action === 'codes' && req.method === 'GET') {
-      const { data, error } = await sb.from('invitation_codes').select('max_uses,uses,created_at')
-        .is('revoked_at', null).order('created_at', { ascending: false }).limit(1).maybeSingle();
-      if (error) throw error;
-      return res.json({ active: data ? { limit: data.max_uses, uses: data.uses, createdAt: data.created_at } : null });
-    }
-    if (action === 'codes' && req.method === 'POST') {
-      const p = z.object({ limit: z.number().int().min(1).max(100000) }).safeParse(req.body);
-      if (!p.success) return res.status(400).json({ error: 'Số lượt dùng không hợp lệ.' });
-      const code = genCode();
-      const { data, error } = await sb.from('invitation_codes')
-        .insert({ code_hash: hmac(process.env.CODE_PEPPER!, code), max_uses: p.data.limit, uses: 0 })
-        .select('id').single();
-      if (error) throw error;
-      // Chỉ giữ một mã hoạt động: thu hồi mã trước đó.
-      const { error: revokeErr } = await sb.from('invitation_codes').update({ revoked_at: new Date().toISOString() })
-        .is('revoked_at', null).neq('id', data.id);
-      if (revokeErr) throw revokeErr;
-      return res.json({ code, limit: p.data.limit }); // plaintext shown once, never stored
-    }
     if (action === 'settings' && req.method === 'GET') {
       const { data, error } = await sb.from('exam_settings').select('*').eq('id', 1).single();
       if (error) throw error;
@@ -202,7 +340,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         duration_minutes: d.durationMinutes, question_count: d.multipleChoiceCount + d.essayCount,
         mc_question_count: d.multipleChoiceCount, essay_question_count: d.essayCount,
         passing_percentage: passingScoreToPercentage(d.passingScore),
-        invitation_required: d.invitationRequired, show_score: d.showScore, display_mode: d.displayMode, active: d.active,
+        show_score: d.showScore, display_mode: d.displayMode, active: d.active,
         updated_at: new Date().toISOString(),
       }).eq('id', 1).select('*').single();
       if (error) throw error;
@@ -233,14 +371,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const attempts: any[] = [];
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await sb.from('exam_attempts')
-          .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,correct_count,incorrect_count,scored_points,total_points,result,started_at,submitted_at,submit_reason')
+          .select('id,full_name,normalized_email,position,candidate_level,main_project,question_order,correct_count,incorrect_count,scored_points,total_points,result,started_at,submitted_at,submit_reason,participant_order,participant_list_name')
           .neq('status', 'in_progress').order('submitted_at').order('id')
           .range(offset, offset + pageSize - 1);
         if (error) throw error;
         attempts.push(...data);
         if (data.length < pageSize) break;
       }
-      const questionIds = [...new Set(attempts.flatMap((a) => a.question_order as string[]))];
+      const orderedAttempts = orderExportAttempts(attempts);
+      const questionIds = [...new Set(orderedAttempts.flatMap((a) => a.question_order as string[]))];
       const questions: any[] = [];
       for (let offset = 0; offset < questionIds.length; offset += idChunk) {
         const { data, error } = await sb.from('exam_questions')
@@ -250,8 +389,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         questions.push(...data);
       }
       const answers: any[] = [];
-      for (let attemptOffset = 0; attemptOffset < attempts.length; attemptOffset += idChunk) {
-        const attemptIds = attempts.slice(attemptOffset, attemptOffset + idChunk).map((a) => a.id);
+      for (let attemptOffset = 0; attemptOffset < orderedAttempts.length; attemptOffset += idChunk) {
+        const attemptIds = orderedAttempts.slice(attemptOffset, attemptOffset + idChunk).map((a) => a.id);
         for (let offset = 0; ; offset += pageSize) {
           const { data, error } = await sb.from('exam_answers')
             .select('attempt_id,question_id,selected_options,essay_response')
@@ -261,7 +400,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (data.length < pageSize) break;
         }
       }
-      const wb = buildResultsWorkbook({ attempts, questions, answers });
+      const wb = buildResultsWorkbook({ attempts: orderedAttempts, questions, answers });
       const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
       const archive: Archiver = new ZipArchive({ zlib: { level: 6 } });
       const archiveError = (error: Error) => {
@@ -280,9 +419,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         items.push(answer);
         answersByAttempt.set(answer.attempt_id, items);
       }
-      for (let index = 0; index < attempts.length; index++) {
-        const attempt = attempts[index];
-        const name = `pdfs/${reviewPdfName(attempt, index)}`;
+      for (let index = 0; index < orderedAttempts.length; index++) {
+        const attempt = orderedAttempts[index];
+        const name = `pdfs/${adminResultPdfName(attempt, attempt.participant_order ?? index + 1)}`;
         const pdf = await buildReviewPdf({ attempt, questions, answers: answersByAttempt.get(attempt.id) ?? [] });
         await appendZipEntry(archive, pdf, name);
       }

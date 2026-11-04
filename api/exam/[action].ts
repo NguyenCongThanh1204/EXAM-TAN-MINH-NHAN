@@ -24,7 +24,8 @@ const ERR: Record<string, [number, string]> = {
   email_used: [409, 'Email này đã được dùng để thi. Mỗi email chỉ được tham gia một lần.'],
   invalid_project: [400, 'Công trình đã chọn không hợp lệ hoặc không còn trong danh sách. Hãy tải lại trang và chọn lại.'],
   no_questions: [503, 'Chưa có câu hỏi nào đang hoạt động. Vui lòng báo quản trị viên kiểm tra ngân hàng câu hỏi.'],
-  not_ready: [503, 'Cơ sở dữ liệu chưa áp dụng migration 005 cho cách chọn số câu mới. Vui lòng báo quản trị viên cập nhật.'],
+  invalid_question_count: [503, 'Cấu hình kỳ thi phải gồm đúng 20 câu để tính 0,5 điểm mỗi câu. Vui lòng báo quản trị viên kiểm tra.'],
+  not_ready: [503, 'Ngân hàng câu hỏi chưa đủ số câu đang hoạt động theo cấu hình hiện tại. Vui lòng báo quản trị viên kiểm tra.'],
 };
 
 async function attemptId(req: VercelRequest): Promise<string | null> {
@@ -57,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'start' && req.method === 'POST') {
       // Per-IP limit is generous: many candidates may share one office NAT address.
-      if (await limited('start:' + A, 200, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' });
+      if (await limited('start:' + A, 240, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' });
       const p = Start.safeParse(req.body);
       if (!p.success) return res.status(400).json({ error: 'Dữ liệu không hợp lệ.', fields: p.error.flatten().fieldErrors });
       const token = newToken();

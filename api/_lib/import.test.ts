@@ -25,7 +25,7 @@ describe('excel rows', () => {
     expect(r.errors).toEqual([]);
     expect(r.items.map(({ type, correct, points, referenceAnswer }) => ({ type, correct, points, referenceAnswer }))).toEqual([
       { type: 'multiple', correct: ['a', 'c'], points: 1, referenceAnswer: '' },
-      { type: 'essay', correct: [], points: 5, referenceAnswer: 'Bảo vệ môi trường' },
+      { type: 'essay', correct: [], points: 0.5, referenceAnswer: 'Bảo vệ môi trường' },
     ]);
   });
 });
@@ -37,7 +37,7 @@ describe('word text', () => {
     expect(r.items).toHaveLength(3);
     expect(r.items[1]).toMatchObject({ text: 'Đa dạng sinh học là gì tiếp tục dòng hai?', type: 'multiple', points: 1, correct: ['a', 'b'] });
     expect(r.items[1].options[1].text).toBe('Hai nối tiếp dòng');
-    expect(r.items[2]).toMatchObject({ type: 'essay', points: 5, correct: [], referenceAnswer: 'Bảo vệ môi trường' });
+    expect(r.items[2]).toMatchObject({ type: 'essay', points: 0.5, correct: [], referenceAnswer: 'Bảo vệ môi trường' });
   });
   it('flags a question without answer line', () => {
     const r = parseText('1. Q?\nA. x\nB. y\n');

@@ -19,6 +19,18 @@ type Settings = {
   displayMode: 'paged' | 'all'; active: boolean;
 };
 type Project = { id: string; name: string; active: boolean };
+type EssayGrade = {
+  questionId: string; number: number; text: string;
+  response: string; passed: boolean | null;
+};
+type GradeAttempt = {
+  id: string; participantOrder: number | null; fullName: string; email: string;
+  position: string; mainProject: string; candidateLevel: string; submittedAt: string;
+  submitReason: string | null;
+  correctCount: number; incorrectCount: number; mcPoints: number; mcMaxPoints: number;
+  scoredPoints: number | null; totalPoints: number | null; result: 'PASS' | 'FAIL' | null;
+  essays: EssayGrade[]; pendingEssayCount: number;
+};
 
 const toB64 = (f: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] ?? ''); r.onerror = () => rej(new Error('Không đọc được tệp.')); r.readAsDataURL(f); });
 const inputCls = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20';
@@ -75,7 +87,9 @@ function SettingsForm({ run }: { run: Run }) {
   useEffect(() => { api<Settings>('admin/settings').then(setS).catch((e: Error) => toast('error', e.message)); }, [toast]);
   if (!s) return <p className="text-sm text-slate-500">Đang tải cấu hình…</p>;
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS({ ...s, [k]: v });
+  const questionCountIsValid = s.multipleChoiceCount + s.essayCount === 20;
   const save = () => void run(async () => {
+    if (!questionCountIsValid) return;
     setBusy(true);
     try { setS(await api<Settings>('admin/settings', { method: 'PUT', body: JSON.stringify(s) })); toast('success', 'Đã lưu cấu hình kỳ thi.'); }
     finally { setBusy(false); }
@@ -88,11 +102,14 @@ function SettingsForm({ run }: { run: Run }) {
           <Field label="Thời gian bắt đầu"><input type="datetime-local" className={inputCls} value={s.openingAt} onChange={(e) => set('openingAt', e.target.value)} /></Field>
           <Field label="Thời gian kết thúc"><input type="datetime-local" className={inputCls} value={s.closingAt} onChange={(e) => set('closingAt', e.target.value)} /></Field>
           <Field label="Thời lượng làm bài (phút)"><input type="number" min={1} max={600} className={inputCls} value={s.durationMinutes} onChange={(e) => set('durationMinutes', Number(e.target.value))} /></Field>
-          <Field label="Số câu trắc nghiệm" ><input type="number" min={0} max={1000} className={inputCls} value={s.multipleChoiceCount} onChange={(e) => set('multipleChoiceCount', Number(e.target.value))} /></Field>
-          <Field label="Số câu tự luận" ><input type="number" min={0} max={1000} className={inputCls} value={s.essayCount} onChange={(e) => set('essayCount', Number(e.target.value))} /></Field>
-          <Field label="Điểm đạt (thang 10)">
-            <input type="number" min={0.1} max={10} step={0.1} className={inputCls} value={s.passingScore}
-              onChange={(e) => set('passingScore', Number(e.target.value))} />
+          <Field label="Số câu trắc nghiệm" hint="Tổng số câu trắc nghiệm và tự luận phải đúng 20. Mỗi câu tối đa 0,5 điểm.">
+            <input type="number" min={0} max={20} className={inputCls} value={s.multipleChoiceCount} onChange={(e) => set('multipleChoiceCount', Number(e.target.value))} />
+          </Field>
+          <Field label="Số câu tự luận">
+            <input type="number" min={0} max={20} className={inputCls} value={s.essayCount} onChange={(e) => set('essayCount', Number(e.target.value))} />
+          </Field>
+          <Field label="Điểm đạt (thang 10)" hint="Tối thiểu 7 điểm.">
+            <input type="number" min={7} max={7} className={inputCls} value={7} disabled />
           </Field>
         </div>
       </Card>
@@ -114,12 +131,12 @@ function SettingsForm({ run }: { run: Run }) {
       <Card id="cfg-access" title="Truy cập và kết quả">
         <div className="grid gap-3 sm:grid-cols-2">
           <Switch checked={s.active} onChange={(v) => set('active', v)} label="Mở kỳ thi" hint="Tắt để đóng ngay lập tức." />
-          <Switch checked={s.showScore} onChange={(v) => set('showScore', v)} label="Hiện điểm" hint="Hiện điểm trắc nghiệm sau khi nộp." />
+          <Switch checked={s.showScore} onChange={(v) => set('showScore', v)} label="Hiện điểm" hint="Hiện tổng điểm và kết quả sau khi chấm xong tự luận." />
         </div>
       </Card>
 
       <div className="flex justify-end">
-        <button className={btnPrimary} disabled={busy} onClick={save}>{busy ? 'Đang lưu…' : 'Lưu cấu hình'}</button>
+        <button className={btnPrimary} disabled={busy || !questionCountIsValid} onClick={save}>{busy ? 'Đang lưu…' : 'Lưu cấu hình'}</button>
       </div>
     </div>
   );
@@ -389,7 +406,7 @@ function Import({ run }: { run: Run }) {
             <ol className="max-h-72 list-decimal space-y-3 overflow-auto rounded-xl border border-slate-200 p-4 pl-9">
               {pv.preview.map((q, i) => (
                 <li key={i}>
-                  <div>{q.text} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{q.type === 'essay' ? `tự luận, tối đa ${q.points} điểm` : `${q.type === 'multiple' ? 'nhiều đáp án' : 'một đáp án'}, 1 điểm nội bộ`}</span></div>
+                  <div>{q.text} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{q.type === 'essay' ? 'tự luận, Đạt = 0,5 điểm; Không đạt = 0 điểm' : `${q.type === 'multiple' ? 'nhiều đáp án' : 'một đáp án'}, tối đa 0,5 điểm`}</span></div>
                   {q.type !== 'essay' && <div className="mt-1 flex flex-wrap gap-x-4 text-slate-600">{q.options.map((o) => <span key={o.id} className={q.correct.includes(o.id) ? 'font-semibold text-teal-700' : ''}>{o.id.toUpperCase()}. {o.text}</span>)}</div>}
                   {q.type === 'essay' && <div className="mt-1 text-slate-600">Đáp án tham khảo: {q.referenceAnswer}</div>}
                 </li>
@@ -408,7 +425,7 @@ type DashboardResponse = {
   tabSwitchSummary: { total: number; violations: number };
 };
 type DashboardGroup = { label: string; metric: DashboardMetric };
-const scoreLabels = ['Dưới 5', '5–6,4', '6,5–7,9', '8–8,9', 'Từ 9 trở lên'];
+const scoreLabels = ['Dưới 5', '5–6,9', '7–7,9', '8–8,9', 'Từ 9 trở lên'];
 const countFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const scoreFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
@@ -444,7 +461,7 @@ function DashboardChart({ metric }: { metric: DashboardMetric }) {
         </div>
       </section>
       <section aria-labelledby="dashboard-score-title" className="rounded-xl border border-slate-200 p-4">
-        <h3 id="dashboard-score-title" className="text-sm font-semibold text-slate-800">Phân bố điểm trắc nghiệm (thang 10)</h3>
+        <h3 id="dashboard-score-title" className="text-sm font-semibold text-slate-800">Phân bố điểm tổng kết (thang 10)</h3>
         <div role="img" aria-label="Biểu đồ số bài thi theo khoảng điểm trên thang 10"
           className="mt-4 flex h-40 items-end gap-1 border-b border-l border-slate-200 px-2">
           {metric.scoreDistribution.map((bucket) => (
@@ -457,7 +474,7 @@ function DashboardChart({ metric }: { metric: DashboardMetric }) {
             </div>
           ))}
         </div>
-        <p className="mt-2 text-xs text-slate-500">Các khoảng: dưới 5; 5–6,4; 6,5–7,9; 8–8,9; từ 9 trở lên.</p>
+        <p className="mt-2 text-xs text-slate-500">Các khoảng: dưới 5; 5–6,9; 7–7,9; 8–8,9; từ 9 trở lên.</p>
       </section>
     </div>
   );
@@ -511,7 +528,7 @@ function ResultsDashboard() {
             {response?.levelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </Field>
-        <Field label="Điểm trắc nghiệm">
+        <Field label="Điểm tổng kết">
           <select className={inputCls} value={scoreBucket} onChange={(e) => setScoreBucket(e.target.value)}>
             <option value="">Tất cả điểm</option>
             {scoreLabels.map((label, index) => <option key={label} value={index}>{label} điểm</option>)}
@@ -533,7 +550,7 @@ function ResultsDashboard() {
               { label: 'Tổng lượt đã nộp', value: countFormat.format(metric.total), color: 'text-slate-900' },
               { label: 'Đạt', value: countFormat.format(metric.pass), color: 'text-teal-700' },
               { label: 'Không đạt', value: countFormat.format(metric.fail), color: 'text-red-700' },
-              { label: 'Điểm trắc nghiệm trung bình', value: displayScore(metric.averageScore), color: 'text-slate-900' },
+              { label: 'Điểm tổng kết trung bình', value: displayScore(metric.averageScore), color: 'text-slate-900' },
               {
                 label: 'Lượt vi phạm / tổng nộp (toàn kỳ thi)',
                 value: `${countFormat.format(response?.tabSwitchSummary.violations ?? 0)} / ${countFormat.format(response?.tabSwitchSummary.total ?? 0)}`,
@@ -659,10 +676,234 @@ function Results({ run }: { run: Run }) {
   );
 }
 
+function EssayGrading({ run }: { run: Run }) {
+  const { toast } = useUi();
+  const [attempts, setAttempts] = useState<GradeAttempt[] | null>(null);
+  const [selectedId, setSelectedId] = useState('');
+  const [filter, setFilter] = useState<'pending' | 'all' | 'graded'>('pending');
+  const [search, setSearch] = useState('');
+  const [savingAttempt, setSavingAttempt] = useState('');
+  const [drafts, setDrafts] = useState<Record<string, Record<string, boolean>>>({});
+  const [loadError, setLoadError] = useState('');
+  const reload = async () => {
+    setLoadError('');
+    try {
+      const response = await api<{ attempts: GradeAttempt[] }>('admin/grading');
+      setAttempts(response.attempts);
+      setSelectedId((current) => response.attempts.some((attempt) => attempt.id === current)
+        ? current
+        : response.attempts.find((attempt) => attempt.pendingEssayCount > 0)?.id
+          ?? response.attempts[0]?.id
+          ?? '');
+    } catch (error) {
+      setAttempts(null);
+      setLoadError(error instanceof Error ? error.message : 'Không tải được danh sách bài thi.');
+      throw error;
+    }
+  };
+  useEffect(() => { void reload().catch((e: Error) => toast('error', e.message)); }, [toast]);
+
+  const pendingCount = attempts?.filter((attempt) => attempt.pendingEssayCount > 0).length ?? 0;
+  const gradedCount = (attempts?.length ?? 0) - pendingCount;
+  const visibleAttempts = (attempts ?? []).filter((attempt) => {
+    if (filter === 'pending' && attempt.pendingEssayCount === 0) return false;
+    if (filter === 'graded' && attempt.pendingEssayCount > 0) return false;
+    const query = search.trim().toLocaleLowerCase('vi');
+    return !query || attempt.fullName.toLocaleLowerCase('vi').includes(query)
+      || attempt.email.toLocaleLowerCase('vi').includes(query)
+      || String(attempt.participantOrder ?? '').includes(query);
+  });
+  const selected = attempts?.find((attempt) => attempt.id === selectedId);
+
+  const gradeFor = (attempt: GradeAttempt, essay: EssayGrade) =>
+    drafts[attempt.id]?.[essay.questionId] ?? essay.passed;
+  const selectedCanSave = !!selected && selected.essays.every((essay) => gradeFor(selected, essay) !== null);
+  const saveGrades = (attempt: GradeAttempt) => {
+    const grades: { questionId: string; passed: boolean }[] = [];
+    for (const essay of attempt.essays) {
+      const passed = gradeFor(attempt, essay);
+      if (passed === null) {
+        toast('error', 'Hãy chọn Đạt hoặc Không đạt cho tất cả câu tự luận trước khi lưu.');
+        return;
+      }
+      grades.push({ questionId: essay.questionId, passed });
+    }
+    void run(async () => {
+      setSavingAttempt(attempt.id);
+      try {
+        await api('admin/grade-essay-attempt', {
+          method: 'POST',
+          body: JSON.stringify({
+            attemptId: attempt.id,
+            grades,
+          }),
+        });
+        await reload();
+        setDrafts((current) => {
+          const next = { ...current };
+          delete next[attempt.id];
+          return next;
+        });
+        toast('success', 'Đã lưu kết quả chấm cho toàn bài và cập nhật điểm tổng.');
+      } finally {
+        setSavingAttempt('');
+      }
+    });
+  };
+
+  return (
+    <Card id="essay-grading" title="Chấm điểm tự luận">
+      <p className="text-sm text-slate-600">
+        Mỗi câu tự luận chọn Đạt (0,5 điểm) hoặc Không đạt (0 điểm). Kết quả cuối chỉ chốt khi đã chấm đủ các câu tự luận.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-xs text-amber-800">Cần chấm</p>
+          <p className="mt-1 text-2xl font-bold text-amber-900">{pendingCount}</p>
+        </div>
+        <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
+          <p className="text-xs text-teal-800">Đã chấm đủ</p>
+          <p className="mt-1 text-2xl font-bold text-teal-900">{gradedCount}</p>
+        </div>
+        <div className="flex items-end">
+          <button type="button" className={btnGhost + ' w-full'} disabled={attempts === null || savingAttempt !== ''}
+            onClick={() => void run(reload)}>
+            {attempts === null ? 'Đang tải…' : 'Làm mới danh sách'}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(16rem,0.8fr)_minmax(0,1.8fr)]">
+        <section aria-label="Danh sách bài thi cần chấm" className="min-w-0 space-y-3 lg:sticky lg:top-4 lg:self-start">
+          <Field label="Tìm thí sinh">
+            <input className={inputCls} value={search} onChange={(event) => setSearch(event.target.value)}
+              placeholder="STT, họ tên hoặc email" />
+          </Field>
+          <Field label="Trạng thái">
+            <select className={inputCls} value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
+              <option value="pending">Chưa chấm xong ({pendingCount})</option>
+              <option value="all">Tất cả bài ({attempts?.length ?? 0})</option>
+              <option value="graded">Đã chấm đủ ({gradedCount})</option>
+            </select>
+          </Field>
+          {loadError ? (
+            <div role="alert" className="space-y-3 rounded-lg bg-red-50 p-4 text-sm text-red-800">
+              <p>{loadError}</p>
+              <button type="button" className={btnGhost} disabled={savingAttempt !== ''}
+                onClick={() => void run(reload)}>Thử tải lại</button>
+            </div>
+          ) : attempts === null ? <p role="status" className="text-sm text-slate-500">Đang tải bài thi…</p>
+            : visibleAttempts.length === 0
+              ? <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Không có bài thi phù hợp.</p>
+              : <ul className="max-h-[70vh] divide-y divide-slate-200 overflow-y-auto rounded-xl border border-slate-200">
+                {visibleAttempts.map((attempt) => (
+                  <li key={attempt.id}>
+                    <button type="button" aria-pressed={selectedId === attempt.id}
+                      onClick={() => setSelectedId(attempt.id)}
+                      className={'w-full px-3 py-3 text-left transition ' + (selectedId === attempt.id ? 'bg-teal-50' : 'hover:bg-slate-50')}>
+                      <span className="flex items-start justify-between gap-2">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-slate-800">
+                            {attempt.participantOrder ? `${attempt.participantOrder}. ` : ''}{attempt.fullName}
+                          </span>
+                          <span className="block truncate text-xs text-slate-500">{attempt.email}</span>
+                        </span>
+                        <span className={'shrink-0 rounded-full px-2 py-1 text-xs font-medium ' +
+                          (attempt.submitReason === 'tab_switch' ? 'bg-red-100 text-red-900'
+                            : attempt.pendingEssayCount ? 'bg-amber-100 text-amber-900' : 'bg-teal-100 text-teal-900')}>
+                          {attempt.submitReason === 'tab_switch' ? 'Trượt: chuyển tab'
+                            : attempt.pendingEssayCount ? `Còn ${attempt.pendingEssayCount} câu` : 'Đã chấm'}
+                        </span>
+                      </span>
+                      <span className="mt-2 block text-xs text-slate-600">
+                        Trắc nghiệm {attempt.mcPoints.toFixed(2)} / {attempt.mcMaxPoints.toFixed(2)} điểm
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>}
+        </section>
+
+        <section aria-label="Chi tiết chấm bài" className="min-w-0 space-y-4">
+          {!selected ? <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-600">Chọn bài thi để xem câu trả lời tự luận.</p>
+            : <>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <h3 className="font-semibold text-slate-900">
+                  {selected.participantOrder ? `STT ${selected.participantOrder} · ` : ''}{selected.fullName}
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">{selected.email} · {selected.mainProject} · {selected.candidateLevel}</p>
+                {selected.submitReason === 'tab_switch' && (
+                  <p className="mt-2 rounded-md bg-red-100 px-3 py-2 text-sm font-semibold text-red-900">
+                    Tự động không đạt do vi phạm chuyển tab.
+                  </p>
+                )}
+                <p className="mt-2 text-sm font-medium text-slate-800">
+                  Trắc nghiệm: {selected.mcPoints.toFixed(2)} / {selected.mcMaxPoints.toFixed(2)} điểm
+                  {selected.result
+                    ? ` · Tổng: ${selected.scoredPoints?.toFixed(2)} / 10 · ${selected.result === 'PASS' ? 'ĐẠT' : 'KHÔNG ĐẠT'}`
+                    : ` · Chờ chấm ${selected.pendingEssayCount} câu tự luận`}
+                </p>
+              </div>
+              {selected.essays.map((essay) => (
+                <EssayDecisionCard key={essay.questionId} essay={essay}
+                  passed={gradeFor(selected, essay)}
+                  onChange={(passed) => setDrafts((current) => ({
+                    ...current,
+                    [selected.id]: { ...current[selected.id], [essay.questionId]: passed },
+                  }))} />
+              ))}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm text-slate-600">
+                  Chọn kết quả cho toàn bộ {selected.essays.length} câu rồi lưu một lần cho bài thi này.
+                </p>
+                <button type="button" className={btnPrimary}
+                  disabled={!selectedCanSave || savingAttempt !== ''}
+                  onClick={() => saveGrades(selected)}>
+                  {savingAttempt === selected.id ? 'Đang lưu toàn bài…' : 'Lưu kết quả cả bài'}
+                </button>
+              </div>
+            </>}
+        </section>
+      </div>
+    </Card>
+  );
+}
+
+function EssayDecisionCard({
+  essay, passed, onChange,
+}: {
+  essay: EssayGrade; passed: boolean | null; onChange: (passed: boolean) => void;
+}) {
+  return (
+    <article className="space-y-4 rounded-xl border border-slate-200 p-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Câu {essay.number} · Tự luận</p>
+        <h4 className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-900">{essay.text}</h4>
+      </div>
+      <div className="rounded-xl border-2 border-slate-300 bg-white p-5 shadow-sm">
+        <p className="text-sm font-bold text-slate-900">Bài làm của thí sinh</p>
+        <p className="mt-3 whitespace-pre-wrap text-base font-medium leading-7 text-slate-950">
+          {essay.response || '(Thí sinh bỏ trống câu này)'}
+        </p>
+      </div>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium text-slate-700">Kết quả chấm</legend>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" aria-pressed={passed === true} onClick={() => onChange(true)}
+            className={passed === true ? btnPrimary : btnGhost}>Đạt · 0,5 điểm</button>
+          <button type="button" aria-pressed={passed === false} onClick={() => onChange(false)}
+            className={passed === false ? btnDanger : btnGhost}>Không đạt · 0 điểm</button>
+        </div>
+      </fieldset>
+    </article>
+  );
+}
+
 const TABS = [
   { id: 'settings', label: 'Cấu hình' },
   { id: 'participants', label: 'Danh sách email' },
   { id: 'questions', label: 'Câu hỏi' },
+  { id: 'grading', label: 'Chấm tự luận' },
   { id: 'results', label: 'Kết quả' },
 ] as const;
 type Tab = (typeof TABS)[number]['id'];
@@ -711,6 +952,7 @@ export default function Admin() {
         {tab === 'settings' && <div className="space-y-6"><SettingsForm run={run} /><Projects run={run} /></div>}
         {tab === 'participants' && <Participants run={run} />}
         {tab === 'questions' && <Import run={run} />}
+        {tab === 'grading' && <EssayGrading run={run} />}
         {tab === 'results' && <Results run={run} />}
       </main>
     </div>

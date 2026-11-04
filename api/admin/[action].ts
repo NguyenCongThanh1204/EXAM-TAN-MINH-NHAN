@@ -10,7 +10,7 @@ import { adminResultPdfName, buildReviewPdf } from '../_lib/review-pdf.js';
 import { appendZipEntry } from '../_lib/zip.js';
 import { parseRows, parseText } from '../_lib/import.js';
 import { buildExamDashboard, buildTabSwitchSummary } from '../_lib/dashboard.js';
-import { passingScoreToPercentage, scoreBucketOutOfTen } from '../_lib/scoring.js';
+import { passingScoreToPercentage, scoreBucketOutOfTen, scoreOutOfTen } from '../_lib/scoring.js';
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph } from 'docx';
 
@@ -24,13 +24,12 @@ const SettingsIn = z.object({
   durationMinutes: z.number().int().min(1).max(600),
   multipleChoiceCount: z.number().int().min(0).max(1000),
   essayCount: z.number().int().min(0).max(1000),
-  passingScore: z.number().min(0.1).max(10)
-    .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-8, 'Điểm đạt tối đa một chữ số thập phân.'),
+  passingScore: z.literal(7),
   showScore: z.boolean(),
   displayMode: z.enum(['paged', 'all']),
   active: z.boolean(),
-}).refine((v) => v.multipleChoiceCount + v.essayCount >= 1 && v.multipleChoiceCount + v.essayCount <= 1000,
-  { message: 'Cấu hình tổng số câu phải từ 1 đến 1.000.', path: ['multipleChoiceCount'] })
+}).refine((v) => v.multipleChoiceCount + v.essayCount === 20,
+  { message: 'Bài thi cần đúng 20 câu để mỗi câu có trọng số 0,5 điểm.', path: ['multipleChoiceCount'] })
   .refine((v) => Date.parse(`${v.closingAt}:00${VN_OFFSET}`) > Date.parse(`${v.openingAt}:00${VN_OFFSET}`),
   { message: 'Giờ kết thúc phải sau giờ bắt đầu.', path: ['closingAt'] });
 type SettingsRow = {
@@ -230,6 +229,129 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ emails, count: emails.length });
     }
 
+    if (action === 'grading' && req.method === 'GET') {
+      const attempts: any[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await sb.from('exam_attempts')
+          .select('id,full_name,normalized_email,position,main_project,candidate_level,question_order,participant_order,submitted_at,correct_count,incorrect_count,scored_points,total_points,result,submit_reason')
+          .neq('status', 'in_progress').order('participant_order').order('submitted_at')
+          .range(offset, offset + 999);
+        if (error) throw error;
+        attempts.push(...data);
+        if (data.length < 1000) break;
+      }
+      const questionIds = [...new Set(attempts.flatMap((attempt) => attempt.question_order as string[]))];
+      const questions: any[] = [];
+      for (let offset = 0; offset < questionIds.length; offset += 100) {
+        const { data, error } = await sb.from('exam_questions')
+          .select('id,question_text,question_type')
+          .in('id', questionIds.slice(offset, offset + 100));
+        if (error) throw error;
+        questions.push(...data);
+      }
+      const questionMap = new Map(questions.map((question) => [question.id, question]));
+      const essayQuestionIds = questions.filter((question) => question.question_type === 'essay').map((question) => question.id);
+      const answers: any[] = [];
+      if (essayQuestionIds.length > 0) {
+        for (let attemptOffset = 0; attemptOffset < attempts.length; attemptOffset += 100) {
+          const attemptIds = attempts.slice(attemptOffset, attemptOffset + 100).map((attempt) => attempt.id);
+          for (let questionOffset = 0; questionOffset < essayQuestionIds.length; questionOffset += 100) {
+            const questionChunk = essayQuestionIds.slice(questionOffset, questionOffset + 100);
+            for (let offset = 0; ; offset += 1000) {
+              const { data, error } = await sb.from('exam_answers')
+                .select('attempt_id,question_id,essay_response,essay_passed')
+                .in('attempt_id', attemptIds).in('question_id', questionChunk)
+                .range(offset, offset + 999);
+              if (error) {
+                if (error.message.includes('essay_passed')
+                  && (/does not exist|schema cache/i.test(error.message))) {
+                  console.error(rid, error.message);
+                  return res.status(503).json({
+                    error: 'Cơ sở dữ liệu đang ở cấu trúc chấm tự luận cũ. Hãy chạy migration 018_binary_essay_grading.sql trên Supabase rồi tải lại.',
+                  });
+                }
+                throw error;
+              }
+              answers.push(...data);
+              if (data.length < 1000) break;
+            }
+          }
+        }
+      }
+      const answerMap = new Map(answers.map((answer) => [`${answer.attempt_id}:${answer.question_id}`, answer]));
+      const gradingAttempts = attempts.map((attempt) => {
+        const essayQuestions = (attempt.question_order as string[])
+          .map((id, index) => ({ question: questionMap.get(id), index }))
+          .filter((entry) => entry.question?.question_type === 'essay');
+        const essays = essayQuestions.map(({ question, index }) => {
+          const answer = answerMap.get(`${attempt.id}:${question.id}`);
+          return {
+            questionId: question.id,
+            number: index + 1,
+            text: question.question_text,
+            response: answer?.essay_response ?? '',
+            passed: answer?.essay_passed ?? null,
+          };
+        });
+        const mcTotal = (attempt.question_order as string[])
+          .filter((id) => questionMap.get(id)?.question_type !== 'essay').length;
+        const pendingEssayCount = essays.filter((essay) => essay.passed === null).length;
+        return {
+          id: attempt.id,
+          participantOrder: attempt.participant_order,
+          fullName: attempt.full_name,
+          email: attempt.normalized_email,
+          position: attempt.position,
+          mainProject: attempt.main_project,
+          candidateLevel: attempt.candidate_level,
+          submittedAt: attempt.submitted_at,
+          submitReason: attempt.submit_reason,
+          correctCount: attempt.correct_count ?? 0,
+          incorrectCount: attempt.incorrect_count ?? 0,
+          mcPoints: (attempt.correct_count ?? 0) * 0.5,
+          mcMaxPoints: mcTotal * 0.5,
+          scoredPoints: scoreOutOfTen(attempt.scored_points, attempt.total_points),
+          totalPoints: attempt.scored_points === null ? null : 10,
+          result: attempt.result,
+          essays,
+          pendingEssayCount,
+        };
+      }).filter((attempt) => attempt.essays.length > 0);
+      return res.json({ attempts: gradingAttempts });
+    }
+
+    if (action === 'grade-essay-attempt' && req.method === 'POST') {
+      const p = z.object({
+        attemptId: z.string().uuid(),
+        grades: z.array(z.object({
+          questionId: z.string().uuid(),
+          passed: z.boolean(),
+        })).max(20),
+      }).safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Kết quả chấm không hợp lệ.' });
+      const { data, error } = await sb.rpc('grade_essay_attempt', {
+        p_attempt: p.data.attemptId,
+        p_grades: p.data.grades,
+      });
+      if (error?.message.includes('grade_essay_attempt')
+        && (/does not exist|schema cache/i.test(error.message))) {
+        console.error(rid, error.message);
+        return res.status(503).json({
+          error: 'Cơ sở dữ liệu chưa hỗ trợ lưu chấm cả bài. Hãy chạy migration 019_bulk_essay_grading_and_tab_violation.sql trên Supabase.',
+        });
+      }
+      if (error?.message.includes('invalid_grade'))
+        return res.status(400).json({ error: 'Kết quả chấm không hợp lệ.' });
+      if (error?.message.includes('attempt_not_found'))
+        return res.status(404).json({ error: 'Không tìm thấy bài thi.' });
+      if (error?.message.includes('attempt_not_submitted'))
+        return res.status(409).json({ error: 'Chỉ chấm được bài thi đã nộp.' });
+      if (error?.message.includes('question_not_in_attempt') || error?.message.includes('question_not_essay'))
+        return res.status(400).json({ error: 'Câu hỏi tự luận không thuộc bài thi này.' });
+      if (error) throw error;
+      return res.json({ grading: data });
+    }
+
     if (action === 'projects' && req.method === 'GET') {
       const { data, error } = await sb.from('exam_projects').select('id,name,active').order('name');
       if (error) throw error;
@@ -247,12 +369,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         candidate_level: string | null;
         correct_count: number | null;
         incorrect_count: number | null;
+        scored_points: number | null;
+        total_points: number | null;
         result: string | null;
         submit_reason: string | null;
       }[] = [];
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await sb.from('exam_attempts')
-          .select('project_id,main_project,candidate_level,correct_count,incorrect_count,result,submit_reason')
+          .select('project_id,main_project,candidate_level,correct_count,incorrect_count,scored_points,total_points,result,submit_reason')
           .neq('status', 'in_progress').order('id').range(offset, offset + pageSize - 1);
         if (error) throw error;
         attempts.push(...data);
@@ -274,8 +398,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (projectId && attempt.project_id !== projectId) return false;
         if (level && (attempt.candidate_level?.trim() || 'Chưa khai báo') !== level) return false;
         if (scoreBucket) {
-          const mcTotal = (attempt.correct_count ?? 0) + (attempt.incorrect_count ?? 0);
-          if (scoreBucketOutOfTen(attempt.correct_count, mcTotal) !== Number(scoreBucket)) return false;
+          if (scoreBucketOutOfTen(attempt.scored_points, attempt.total_points) !== Number(scoreBucket)) return false;
         }
         return true;
       });
@@ -365,6 +488,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (activeError) throw activeError;
         if ((count ?? 0) > 0)
           return res.status(409).json({ error: 'Vẫn còn bài thi đang làm. Hãy chờ thí sinh nộp bài trước khi xóa kết quả.' });
+        const { count: pendingGrades, error: pendingGradeError } = await sb.from('exam_attempts')
+          .select('id', { count: 'exact', head: true }).neq('status', 'in_progress').is('result', null);
+        if (pendingGradeError) throw pendingGradeError;
+        if ((pendingGrades ?? 0) > 0)
+          return res.status(409).json({ error: 'Vẫn còn bài tự luận chưa chấm xong. Hãy chấm đủ trước khi tải và xóa kết quả.' });
       }
       const pageSize = 1000;
       const idChunk = 100; // keeps PostgREST URLs short
@@ -378,7 +506,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         attempts.push(...data);
         if (data.length < pageSize) break;
       }
-      const orderedAttempts = orderExportAttempts(attempts);
+      let exportAttempts = attempts as any[];
+      if (exportAttempts.some((attempt) => attempt.participant_order == null)) {
+        const { data: participants, error } = await sb.from('participant_email_allowlist')
+          .select('email,sequence_number');
+        if (error) throw error;
+        const orderByEmail = new Map(participants.map((participant) => [
+          normalizeEmail(participant.email), participant.sequence_number,
+        ]));
+        exportAttempts = exportAttempts.map((attempt) => ({
+          ...attempt,
+          participant_order: attempt.participant_order ?? orderByEmail.get(normalizeEmail(attempt.normalized_email)) ?? null,
+        }));
+      }
+      if (exportAttempts.some((attempt) => attempt.participant_order == null))
+        return res.status(409).json({ error: 'Không xác định được STT theo danh sách email cho một số bài thi. Hãy kiểm tra danh sách email đã nhập.' });
+      const orderedAttempts = orderExportAttempts(exportAttempts);
       const questionIds = [...new Set(orderedAttempts.flatMap((a) => a.question_order as string[]))];
       const questions: any[] = [];
       for (let offset = 0; offset < questionIds.length; offset += idChunk) {
@@ -393,7 +536,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const attemptIds = orderedAttempts.slice(attemptOffset, attemptOffset + idChunk).map((a) => a.id);
         for (let offset = 0; ; offset += pageSize) {
           const { data, error } = await sb.from('exam_answers')
-            .select('attempt_id,question_id,selected_options,essay_response')
+            .select('attempt_id,question_id,selected_options,essay_response,essay_passed')
             .in('attempt_id', attemptIds).range(offset, offset + pageSize - 1);
           if (error) throw error;
           answers.push(...data);
@@ -446,6 +589,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (activeError) throw activeError;
       if ((count ?? 0) > 0)
         return res.status(409).json({ error: 'Vẫn còn bài thi đang làm. Hãy chờ thí sinh nộp bài trước khi xóa kết quả.' });
+      const { count: pendingGrades, error: pendingGradeError } = await sb.from('exam_attempts')
+        .select('id', { count: 'exact', head: true }).neq('status', 'in_progress').is('result', null);
+      if (pendingGradeError) throw pendingGradeError;
+      if ((pendingGrades ?? 0) > 0)
+        return res.status(409).json({ error: 'Vẫn còn bài tự luận chưa chấm xong. Hãy chấm đủ trước khi xóa kết quả.' });
       const { count: deleted, error } = await sb.from('exam_attempts')
         .delete({ count: 'exact' }).neq('status', 'in_progress');
       if (error) throw error;
@@ -454,14 +602,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'template' && req.method === 'GET') {
       if (req.query.format === 'docx') {
         const lines = [
-          'HƯỚNG DẪN: mỗi câu bắt đầu bằng số thứ tự. Có thể ghi Loại: single, multiple hoặc essay (mặc định single). Mỗi câu trắc nghiệm có 1 điểm nội bộ và hệ thống tự quy đổi tổng điểm về thang 10 (20 câu thì mỗi câu đúng được 0,5 điểm). Điểm: số chỉ dùng cho câu tự luận.',
+          'HƯỚNG DẪN: mỗi câu bắt đầu bằng số thứ tự. Có thể ghi Loại: single, multiple hoặc essay (mặc định single). Bài thi gồm 20 câu, mỗi câu tối đa 0,5 điểm; đạt từ 7/10. Câu tự luận được chấm Đạt (0,5 điểm) hoặc Không đạt (0 điểm).',
           'Câu trắc nghiệm ghi A-F và Đáp án: A hoặc A,C. Câu tự luận ghi Đáp án tham khảo: nội dung đáp án.',
           'Xóa ví dụ trước khi nhập câu hỏi thật.', '',
-          '1. Thủ đô của Việt Nam là?', 'Loại: single', 'Điểm: 1',
+          '1. Thủ đô của Việt Nam là?', 'Loại: single',
           'A. Hà Nội', 'B. Huế', 'C. Đà Nẵng', 'D. Cần Thơ', 'Đáp án: A', '',
           '2. Chọn các số nguyên tố', 'Loại: multiple',
           'A. 2', 'B. 4', 'C. 5', 'Đáp án: A,C', '',
-          '3. Trình bày một giải pháp bảo vệ môi trường', 'Loại: essay', 'Điểm: 5',
+          '3. Trình bày một giải pháp bảo vệ môi trường', 'Loại: essay',
           'Đáp án tham khảo: Nêu được các biện pháp giảm rác thải, tiết kiệm tài nguyên và bảo vệ hệ sinh thái.',
         ];
         const buf = await Packer.toBuffer(new Document({ sections: [{ children: lines.map((t) => new Paragraph(t)) }] }));
@@ -470,12 +618,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.send(buf);
       }
       const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Câu hỏi');
-      ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng (A,C)', 'Loại', 'Điểm tối đa (chỉ tự luận)', 'Đáp án tham khảo']);
-      ws.addRow(['Thủ đô của Việt Nam là?', 'Hà Nội', 'Huế', 'Đà Nẵng', 'Cần Thơ', '', '', 'A', 'single', 1, '']);
+      ws.addRow(['Câu hỏi', 'A', 'B', 'C', 'D', 'E', 'F', 'Đáp án đúng (A,C)', 'Loại', 'Điểm (không dùng; 0,5/câu)', 'Đáp án tham khảo']);
+      ws.addRow(['Thủ đô của Việt Nam là?', 'Hà Nội', 'Huế', 'Đà Nẵng', 'Cần Thơ', '', '', 'A', 'single', '', '']);
       ws.addRow(['Chọn các số nguyên tố', '2', '4', '5', '', '', '', 'A,C', 'multiple', '', '']);
-      ws.addRow(['Trình bày một giải pháp bảo vệ môi trường', '', '', '', '', '', '', '', 'essay', 5, 'Nêu biện pháp giảm rác thải, tiết kiệm tài nguyên và bảo vệ hệ sinh thái.']);
+      ws.addRow(['Trình bày một giải pháp bảo vệ môi trường', '', '', '', '', '', '', '', 'essay', '', 'Nêu biện pháp giảm rác thải, tiết kiệm tài nguyên và bảo vệ hệ sinh thái.']);
       ws.getRow(1).font = { bold: true };
-      ws.getCell(1, 10).note = 'Trắc nghiệm không nhập điểm ở cột này. Mỗi câu trắc nghiệm tính 1 điểm nội bộ và tổng điểm tự quy đổi về thang 10 (20 câu: 0,5 điểm/câu).';
+      ws.getCell(1, 10).note = 'Để trống cột này. Tất cả câu hỏi đều tối đa 0,5 điểm; tự luận chấm Đạt = 0,5 điểm hoặc Không đạt = 0 điểm.';
       ws.columns.forEach((c, i) => { c.width = i === 0 ? 50 : i === 10 ? 60 : 18; });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="mau-cau-hoi.xlsx"');

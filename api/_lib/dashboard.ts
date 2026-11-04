@@ -6,6 +6,8 @@ export type DashboardAttempt = {
   candidate_level: string | null;
   correct_count: number | null;
   incorrect_count: number | null;
+  scored_points: number | null;
+  total_points: number | null;
   result: string | null;
   submit_reason?: string | null;
 };
@@ -31,7 +33,7 @@ export type ExamDashboard = {
 export type TabSwitchSummary = { total: number; violations: number };
 
 const SCORE_BUCKETS = [
-  '<5', '5–6.4', '6.5–7.9', '8–8.9', '≥9',
+  '<5', '5–6.9', '7–7.9', '8–8.9', '≥9',
 ];
 
 export function buildExamDashboard(attempts: DashboardAttempt[], projects: DashboardProject[]): ExamDashboard {
@@ -53,14 +55,13 @@ export function buildExamDashboard(attempts: DashboardAttempt[], projects: Dashb
     else if (attempt.result === 'FAIL') metric.fail += 1;
     else metric.pending += 1;
 
-    const mcTotal = (attempt.correct_count ?? 0) + (attempt.incorrect_count ?? 0);
-    const score = scoreOutOfTen(attempt.correct_count, mcTotal);
+    const score = scoreOutOfTen(attempt.scored_points, attempt.total_points);
     if (score === null) return;
     const totals = accumulators.get(metric);
     if (!totals) throw new Error('Dashboard metric accumulator is missing.');
     totals.score += score;
     metric.graded += 1;
-    const bucketIndex = score < 5 ? 0 : score < 6.5 ? 1 : score < 8 ? 2 : score < 9 ? 3 : 4;
+    const bucketIndex = score < 5 ? 0 : score < 7 ? 1 : score < 8 ? 2 : score < 9 ? 3 : 4;
     metric.scoreDistribution[bucketIndex].count += 1;
   };
   const finish = (metric: DashboardMetric) => {

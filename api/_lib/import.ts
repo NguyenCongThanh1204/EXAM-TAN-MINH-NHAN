@@ -32,9 +32,7 @@ export function build(raws: Raw[]): { items: Item[]; errors: Err[] } {
     if (!text) e('Thiếu nội dung câu hỏi.'); else if (text.length > 2000) e('Câu hỏi quá dài (tối đa 2000 ký tự).');
     const type = parseType(r.type);
     if (!type) e(`Loại câu hỏi "${r.type}" không hợp lệ. Dùng single, multiple hoặc essay.`);
-    // Mỗi câu trắc nghiệm luôn 1 điểm; cột điểm chỉ áp dụng cho câu tự luận.
-    const points = type === 'essay' ? (r.points.trim() ? Number(r.points) : 1) : 1;
-    if (!Number.isFinite(points) || points <= 0 || points > 1000) e('Điểm tối đa của câu tự luận phải lớn hơn 0 và không quá 1000.');
+    const points = type === 'essay' ? 0.5 : 1;
     if (type === 'essay') {
       if (r.opts.some((o) => clean(o.t))) e('Câu tự luận không được có các lựa chọn A-F.');
       if (!clean(r.referenceAnswer)) e('Câu tự luận cần có đáp án tham khảo để admin chấm bài.');

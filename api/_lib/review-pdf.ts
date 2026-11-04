@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import PDFDocument from 'pdfkit';
-import { formatScoreOutOfTen } from './scoring.js';
+import { scoreOutOfTen } from './scoring.js';
 import type { ExportAnswer, ExportAttempt, ExportQuestion } from './workbook.js';
 
 const FONT_REGULAR = readFileSync(new URL('../../node_modules/@fontsource/tinos/files/tinos-vietnamese-400-normal.woff', import.meta.url));
@@ -254,6 +254,14 @@ export function buildReviewPdf(input: {
 }): Promise<Buffer> {
   const questionMap = new Map(input.questions.map((question) => [question.id, question]));
   const answerMap = new Map(input.answers.map((answer) => [answer.question_id, answer]));
+  const multipleChoiceCount = input.attempt.question_order
+    .filter((id) => questionMap.get(id)?.question_type !== 'essay').length;
+  const essayQuestions = input.attempt.question_order
+    .map((id) => questionMap.get(id))
+    .filter((question): question is ExportQuestion => question?.question_type === 'essay');
+  const essayPoints = essayQuestions.reduce((total, question) => {
+    return total + (answerMap.get(question.id)?.essay_passed === true ? 0.5 : 0);
+  }, 0);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 46, bufferPages: true });
     const chunks: Buffer[] = [];
@@ -280,7 +288,11 @@ export function buildReviewPdf(input: {
       `Công trình chính: ${a.main_project}`,
       `Bắt đầu: ${time(a.started_at)}`,
       `Nộp bài: ${time(a.submitted_at)}    Thời lượng: ${duration(a.started_at, a.submitted_at)}`,
-      `Điểm trắc nghiệm: ${formatScoreOutOfTen(a.correct_count, (a.correct_count ?? 0) + (a.incorrect_count ?? 0))}/10 ${a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chưa có kết quả'}`,
+      ...(a.submitted_at ? [
+        `Điểm trắc nghiệm: ${((a.correct_count ?? 0) * 0.5).toFixed(2)}/${(multipleChoiceCount * 0.5).toFixed(2)}`,
+        `Điểm tự luận quy đổi: ${essayPoints.toFixed(2)}/${(essayQuestions.length * 0.5).toFixed(2)}`,
+        `Tổng điểm: ${scoreOutOfTen(a.scored_points, a.total_points)?.toFixed(2) ?? 'Chờ chấm tự luận'}/10 · ${a.result === 'PASS' ? 'ĐẠT' : a.result === 'FAIL' ? 'KHÔNG ĐẠT' : 'Chờ chấm'}`,
+      ] : []),
     ].forEach((line) => writeText(doc, line));
     doc.moveDown(0.8);
     doc.moveTo(46, doc.y).lineTo(549, doc.y).strokeColor('#cbd5e1').stroke();
@@ -304,6 +316,11 @@ export function buildReviewPdf(input: {
         writeText(doc, 'Bài làm của thí sinh:', {}, true);
         doc.fillColor('#0f172a');
         writeText(doc, answer?.essay_response?.trim() || '(Bỏ trống)', { indent: 8 });
+        if (a.submitted_at) {
+          doc.fillColor('#334155');
+          const grade = answer?.essay_passed;
+          writeText(doc, `Kết quả chấm: ${grade === null || grade === undefined ? 'Chưa chấm' : grade ? 'ĐẠT · 0,5 điểm' : 'KHÔNG ĐẠT · 0 điểm'}`, { indent: 8 });
+        }
       } else {
         const selected = answer?.selected_options ?? [];
         for (const option of options) {

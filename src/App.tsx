@@ -3,7 +3,7 @@ import { remainingMs } from './utils/pure';
 import { api, fmt, type ApiError } from './api';
 
 type Opt = { id: string; text: string };
-type Q = { id: string; text: string; type: 'single' | 'multiple' | 'essay'; points: number; options: Opt[] };
+type Q = { id: string; text: string; type: 'single' | 'multiple' | 'essay'; options: Opt[] };
 type AnswerValue = { options: string[]; essay: string | null };
 type Res = { correct: number; incorrect: number; scoredPoints: number; totalPoints: number; result: 'PASS' | 'FAIL' } | null;
 type Info = {
@@ -12,7 +12,8 @@ type Info = {
   serverNow: string; projects: { id: string; name: string }[];
 };
 type St = {
-  status: string; serverNow: string; deadlineAt?: string; hasEssay?: boolean; displayMode?: 'paged' | 'all';
+  status: string; serverNow: string; deadlineAt?: string; hasEssay?: boolean; pendingGrade?: boolean;
+  displayMode?: 'paged' | 'all';
   candidate?: { fullName: string; position: string; level: string; mainProject: string };
   questions?: Q[]; answers?: Record<string, AnswerValue>; result?: Res;
 };
@@ -467,10 +468,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     }, 500);
   };
   const q = qs[i];
-  const multipleChoiceCount = qs.filter((question) => question.type !== 'essay').length;
-  const pointsPerQuestion = multipleChoiceCount > 0
-    ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(10 / multipleChoiceCount)
-    : '0';
+  const pointsPerQuestion = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(0.5);
   const all = st.displayMode === 'all';
   const goTo = (n: number) => {
     setI(n);
@@ -534,7 +532,7 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
         <div className="min-w-0 space-y-4">
         {(all ? qs : [q]).map((q, n) => (
         <section key={q.id} id={'q-' + q.id} className="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-[#35645F]">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">({q.type === 'essay' ? `tối đa ${q.points} điểm` : `+${pointsPerQuestion} điểm`})</span></h2>
+          <h2 className="mb-4 text-lg font-medium">{all && <span className="mr-1 text-[#35645F]">Câu {n + 1}.</span>}{q.text} <span className="text-sm text-slate-500">(tối đa {pointsPerQuestion} điểm)</span></h2>
           {q.type === 'essay' ? (
             <label className="block">
               <span className="sr-only">Câu trả lời tự luận</span>
@@ -631,6 +629,7 @@ export default function App() {
   const [tabSwitchNotice, setTabSwitchNotice] = useState(false);
   const [fullscreenWarning, setFullscreenWarning] = useState('');
   const [fullscreenExitError, setFullscreenExitError] = useState('');
+  const [gradeRefreshError, setGradeRefreshError] = useState('');
   const [phase, setPhase] = useState<'loading' | 'entry' | 'exam' | 'done' | 'error'>('loading');
   const load = useCallback(async () => {
     try {
@@ -648,6 +647,29 @@ export default function App() {
       .then(() => setFullscreenExitError(''))
       .catch(() => setFullscreenExitError('Bài đã nộp nhưng trình duyệt không tự tắt được toàn màn hình.'));
   }, [phase]);
+  useEffect(() => {
+    if (phase !== 'done' || !st?.pendingGrade) {
+      setGradeRefreshError('');
+      return;
+    }
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api<St>('exam/state')
+        .then((state) => {
+          if (!active) return;
+          setSt(state);
+          setRes(state.result ?? null);
+          setGradeRefreshError('');
+        })
+        .catch((error: Error) => {
+          if (active) setGradeRefreshError(`Chưa kiểm tra được trạng thái chấm điểm: ${error.message}`);
+        });
+    }, 15000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [phase, st?.pendingGrade]);
   const returnHome = async () => {
     setResetBusy(true);
     setResetError('');
@@ -723,16 +745,24 @@ export default function App() {
             <div aria-hidden="true" className="absolute -bottom-16 left-8 h-36 w-36 rounded-full bg-white/5" />
             <div className="relative">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-100">
-                {res ? 'BÀI THI ĐÃ HOÀN TẤT' : 'NỘP BÀI THÀNH CÔNG'}
+                {res ? 'BÀI THI ĐÃ HOÀN TẤT' : st?.pendingGrade ? 'ĐANG CHỜ CHẤM TỰ LUẬN' : 'NỘP BÀI THÀNH CÔNG'}
               </p>
               <h2 className="mt-2 text-2xl font-bold sm:text-3xl">
-                {res ? 'Kết quả bài thi' : 'Cảm ơn bạn đã tham gia'}
+                {res ? 'Kết quả bài thi' : st?.pendingGrade ? 'Bài thi đang được chấm' : 'Cảm ơn bạn đã tham gia'}
               </h2>
               {info?.title && <p className="mt-2 text-sm text-blue-100 sm:text-base">{info.title}</p>}
             </div>
           </div>
           <div className="px-5 py-6 sm:px-10 sm:py-8">
-          {res ? (
+          {st?.pendingGrade ? (
+            <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-6 text-center">
+              <p className="text-lg font-semibold text-amber-900">Đã nộp bài thành công</p>
+              <p className="mt-2 text-sm leading-6 text-amber-900">
+                Bài thi có câu tự luận và đang chờ chấm. Kết quả tổng kết sẽ tự hiển thị sau khi chấm xong.
+              </p>
+              <p className="mt-2 text-xs text-amber-800">Trang sẽ tự kiểm tra cập nhật điểm định kỳ.</p>
+            </div>
+          ) : res ? (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className={'rounded-xl border p-5 ' + (res.result === 'PASS' ? 'border-blue-100 bg-blue-50' : 'border-red-100 bg-red-50')}>
@@ -742,18 +772,16 @@ export default function App() {
                   </p>
                 </div>
                 <div className="rounded-xl border border-blue-100 bg-blue-50 p-5">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Điểm trắc nghiệm</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Tổng điểm bài thi</p>
                   <p className="mt-2 text-3xl font-bold text-[#172554]">
-                    {res.correct + res.incorrect > 0
-                      ? new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format((res.correct / (res.correct + res.incorrect)) * 10)
-                      : '—'}
-                    <span className="ml-1 text-base font-medium text-slate-500">/ 10</span>
+                    {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(res.scoredPoints)}
+                    <span className="ml-1 text-base font-medium text-slate-500">/ {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(res.totalPoints)}</span>
                   </p>
                 </div>
               </div>
               <p className="mt-4 text-sm text-slate-600">
                 Đúng <b className="text-slate-800">{res.correct}</b> câu, sai hoặc bỏ trống <b className="text-slate-800">{res.incorrect}</b> câu.
-                Điểm được quy đổi theo số câu trắc nghiệm thực tế.
+                Mỗi câu được quy đổi tối đa 0,5 điểm; đạt từ 7/10 điểm.
               </p>
             </>
           ) : (
@@ -762,9 +790,7 @@ export default function App() {
               <p className="mt-2 text-sm text-slate-600">Cảm ơn bạn đã hoàn thành bài kiểm tra.</p>
             </div>
           )}
-          {st?.hasEssay && res && <p className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-left text-sm leading-6 text-[#172554]">
-            Điểm trắc nghiệm được hiển thị riêng trên thang 10; kết quả đạt/không đạt căn cứ theo tổng điểm bài thi, gồm cả phần tự luận.
-          </p>}
+          {gradeRefreshError && <p role="alert" className="mt-3 text-sm text-red-700">{gradeRefreshError}</p>}
           {/* <p className="mt-4 text-sm text-slate-600">File PDF chỉ chứa câu hỏi và lựa chọn/bài làm của bạn, không có đáp án chuẩn.</p> */}
           {exportError && <p role="alert" className="mt-3 text-sm text-red-700">{exportError}</p>}
           {resetError && <p role="alert" className="mt-4 text-sm text-red-700">{resetError}</p>}

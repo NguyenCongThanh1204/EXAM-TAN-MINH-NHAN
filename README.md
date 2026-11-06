@@ -39,7 +39,7 @@ Nếu tắt mã mời (`invitation_required=false`) thì **không thể chống 
 ## 5. Triển khai (Vercel)
 1. Push lên Git, import vào Vercel (Framework: Vite).
 2. Đặt biến môi trường như `.env.example` (Production ≠ Preview/Dev; dùng project Supabase riêng).
-3. Chạy tất cả migration trong `supabase/migrations/` theo thứ tự tên tệp, đến `020_batched_answer_saving.sql`, trên Supabase của môi trường tương ứng trước khi deploy code gọi RPC mới. Nhập câu hỏi, thêm danh sách công trình trong `#/admin` rồi cập nhật cấu hình. Production và staging phải dùng project Supabase riêng.
+3. Chạy tất cả migration trong `supabase/migrations/` theo thứ tự tên tệp, đến `021_finalize_with_state.sql`, trên Supabase của môi trường tương ứng trước khi deploy code gọi RPC mới. Nhập câu hỏi, thêm danh sách công trình trong `#/admin` rồi cập nhật cấu hình. Production và staging phải dùng project Supabase riêng.
 4. Kiểm tra: vào trang, thi thử bằng 1 mã, đăng nhập `#/admin`, tải ZIP hồ sơ.
 5. Backup: Supabase → Database → Backups, hoặc `pg_dump` trước/sau kỳ thi. Rollback: Vercel → Deployments → Promote bản trước.
 
@@ -59,6 +59,14 @@ Bảo đảm kỳ thi staging đang mở, có đủ 20 câu và công trình đ�
 ```powershell
 k6 run -e BASE=https://staging.example.com -e ORIGIN=https://staging.example.com -e EMAIL_FILE=participants.local.txt -e PROJECT="KHU VỰC ĐÀ NẴNG" -e VUS=171 -e JITTER_SECONDS=20 .\loadtest\k6.js
 ```
-Mỗi VU tạo và nộp một lượt thi; đáp án được gửi theo lô 5 câu. `VUS` tối đa 199. `EMAIL_FILE` được mở tương đối với thư mục `loadtest`; `PROJECT` phải khớp tên công trình đang hoạt động. `JITTER_SECONDS=0` tạo burst bắt đầu gần như đồng thời; đặt `20` để dàn lượt bắt đầu trong tối đa 20 giây. Mỗi email chỉ thi được một lần, vì vậy không dùng lại email test nếu lượt thi đã được tạo. Không chạy trên production.
+Mỗi VU tạo và nộp một lượt thi; đáp án được gửi theo lô 5 câu. `VUS` tối đa 199. `EMAIL_FILE` được mở tương đối với thư mục `loadtest`; `PROJECT` phải khớp tên công trình đang hoạt động. `JITTER_SECONDS=0` tạo burst bắt đầu gần như đồng thời; đặt `20` để dàn lượt bắt đầu trong tối đa 20 giây. Để đồng bộ lượt bắt đầu và nộp, thêm `-e SYNC_START=true -e SYNC_LEAD_SECONDS=10 -e SUBMIT_AFTER_SECONDS=180`: VU chờ một mốc bắt đầu chung, làm bài, rồi chờ mốc nộp chung tính từ lúc bắt đầu. Kết quả có `start_request_offset_ms` và `submit_request_offset_ms` để xem độ lệch thời điểm gửi request; mạng và máy chạy k6 không thể đảm bảo request đến server cùng mili giây. Chọn thời gian nộp dài hơn thời gian làm và đồng bộ toàn bộ đáp án. Mỗi email chỉ thi được một lần, vì vậy không dùng lại email test nếu lượt thi đã được tạo. Không chạy trên production.
+
+Kết quả k6 cũng báo riêng thời gian `start_duration_ms`, `state_duration_ms`, `answer_batch_duration_ms`, `soak_batch_duration_ms` và `submit_duration_ms` để xác định endpoint nào đang chậm; các chỉ số này gồm cả thời gian mạng từ máy chạy k6.
+
+Để chạy soak 20 phút với 171 VU, bắt đầu đồng loạt, gửi lô 5 đáp án định kỳ khoảng 120 giây (được dàn tối đa 30 giây) và nộp đồng loạt cuối bài, dùng:
+```powershell
+k6 run -e BASE=https://staging.example.com -e ORIGIN=https://staging.example.com -e EMAIL_FILE=participants.local.txt -e PROJECT="KHU VỰC ĐÀ NẴNG" -e VUS=171 -e TEST_MODE=soak -e SOAK_MINUTES=20 -e SOAK_INTERVAL_SECONDS=120 -e ANSWER_JITTER_SECONDS=30 -e SYNC_LEAD_SECONDS=10 .\loadtest\k6.js
+```
+Kỳ thi staging phải còn mở trong suốt bài test; nên đặt thời lượng thi tối thiểu 22 phút để có khoảng đệm trước khi nộp. Cần 171 email test mới, chưa dùng và có trong allowlist. Bài test ghi dữ liệu thật vào staging và mỗi email chỉ dùng được một lần; không chạy trên production.
 
 Ngưỡng mặc định: tỷ lệ check trên 99%, lỗi request dưới 1%, p95 dưới 800 ms và p99 dưới 2 giây. Một lần chạy có thể tạo dữ liệu thi thử trong staging; kiểm tra và dọn dữ liệu theo quy trình staging trước khi chạy lại. Không chạy trên production.

@@ -135,12 +135,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'state' && req.method === 'GET') {
-      const { data, error } = await sb.rpc('attempt_state', { p_attempt: id });
+      const [stateResult, settingsResult] = await Promise.all([
+        sb.rpc('attempt_state', { p_attempt: id }),
+        sb.from('exam_settings').select('display_mode').eq('id', 1).single(),
+      ]);
+      const { data, error } = stateResult;
       if (error) throw error;
       const state = data ? { ...data, attemptId: id } : data;
       if (data?.status === 'in_progress') {
-        const { data: s } = await sb.from('exam_settings').select('display_mode').eq('id', 1).single();
-        return res.json({ ...state, displayMode: s?.display_mode === 'all' ? 'all' : 'paged' });
+        if (settingsResult.error) throw settingsResult.error;
+        return res.json({ ...state, displayMode: settingsResult.data.display_mode === 'all' ? 'all' : 'paged' });
       }
       return res.json(state);
     }
@@ -181,9 +185,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (await limited('sub:' + id, 20, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu.' });
       const p = Submit.safeParse(req.body);
       if (!p.success) return res.status(400).json({ error: 'Dữ liệu không hợp lệ.' });
-      const f = await sb.rpc('finalize_attempt', { p_attempt: id, p_reason: p.data.reason }); // idempotent
-      if (f.error) throw f.error;
-      const { data, error } = await sb.rpc('attempt_state', { p_attempt: id });
+      const { data, error } = await sb.rpc('finalize_and_get_attempt_state', {
+        p_attempt: id,
+        p_reason: p.data.reason,
+      });
       if (error) throw error;
       return res.json(data);
     }

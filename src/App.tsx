@@ -12,12 +12,65 @@ type Info = {
   serverNow: string; projects: { id: string; name: string }[];
 };
 type St = {
-  status: string; serverNow: string; deadlineAt?: string; hasEssay?: boolean; pendingGrade?: boolean;
+  status: string; serverNow: string; attemptId?: string; deadlineAt?: string; hasEssay?: boolean; pendingGrade?: boolean;
   displayMode?: 'paged' | 'all';
   candidate?: { fullName: string; position: string; level: string; mainProject: string };
   questions?: Q[]; answers?: Record<string, AnswerValue>; result?: Res;
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type FlushResult = 'saved' | 'error' | 'expired';
+
+function isValidOptionIds(value: unknown, question: Q): value is string[] {
+  return Array.isArray(value) && value.length <= 6
+    && value.every((id: unknown) => typeof id === 'string' && question.options.some((option) => option.id === id));
+}
+
+function readAnswerDraft(attemptId: string | undefined, questions: Q[]) {
+  const pending: Record<string, AnswerValue> = {};
+  if (!attemptId) return { pending, warning: '' };
+  try {
+    const raw = window.localStorage.getItem(`exam-answer-draft:${attemptId}`);
+    if (!raw) return { pending, warning: '' };
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { pending, warning: 'Bản nháp trên thiết bị không hợp lệ; các câu trả lời đã lưu trên máy chủ vẫn được giữ.' };
+    }
+
+    let invalidEntries = false;
+    for (const [questionId, value] of Object.entries(parsed)) {
+      const question = questions.find((item) => item.id === questionId);
+      if (!question || !value || typeof value !== 'object' || Array.isArray(value)) {
+        invalidEntries = true;
+        continue;
+      }
+      const answer = value as Record<string, unknown>;
+      if (!isValidOptionIds(answer.options, question)) {
+        invalidEntries = true;
+        continue;
+      }
+      if (question.type === 'essay') {
+        if (answer.options.length !== 0 || typeof answer.essay !== 'string' || answer.essay.length > 10000) {
+          invalidEntries = true;
+          continue;
+        }
+        pending[questionId] = { options: [], essay: answer.essay };
+      } else {
+        if (answer.essay !== null || (question.type === 'single' && answer.options.length !== 1)) {
+          invalidEntries = true;
+          continue;
+        }
+        pending[questionId] = { options: answer.options, essay: null };
+      }
+    }
+    return {
+      pending,
+      warning: invalidEntries ? 'Một số đáp án nháp không hợp lệ đã bị bỏ qua; các câu trả lời đã lưu trên máy chủ vẫn được giữ.' : '',
+    };
+  } catch (error) {
+    console.error('Không thể khôi phục bản nháp đáp án trên thiết bị.', error);
+    return { pending, warning: 'Không thể khôi phục bản nháp trên thiết bị; các câu trả lời đã lưu trên máy chủ vẫn được giữ.' };
+  }
+}
 
 function Shell({ info, children, compact = false }: { info: Info | null; children: React.ReactNode; compact?: boolean }) {
   return (
@@ -287,23 +340,109 @@ function Entry({ info, onStarted }: { info: Info; onStarted: (fullscreenWarning:
 
 function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, tabSwitch: boolean) => void; fullscreenWarning: string }) {
   const qs = st.questions!;
-  const [ans, setAns] = useState<Record<string, AnswerValue>>(st.answers ?? {});
+  const [restoredDraft] = useState(() => readAnswerDraft(st.attemptId, qs));
+  const [ans, setAns] = useState<Record<string, AnswerValue>>(() => ({ ...(st.answers ?? {}), ...restoredDraft.pending }));
   const [i, setI] = useState(0);
   const offset = useRef(new Date(st.serverNow).getTime() - Date.now());
   const deadline = new Date(st.deadlineAt!).getTime();
   const [left, setLeft] = useState(remainingMs(deadline, offset.current, Date.now()));
-  const [sync, setSync] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [sync, setSync] = useState<'saved' | 'saving' | 'error'>(Object.keys(restoredDraft.pending).length ? 'saving' : 'saved');
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState('');
+  const [draftWarning, setDraftWarning] = useState(restoredDraft.warning);
   const [fullscreenNotice, setFullscreenNotice] = useState(fullscreenWarning);
   const [tabSwitchProtectionEnabled, setTabSwitchProtectionEnabled] = useState(true);
   const [reviewPdfBusy, setReviewPdfBusy] = useState(false);
   const [reviewPdfError, setReviewPdfError] = useState('');
-  const chain = useRef<Promise<unknown>>(Promise.resolve()); // saves are sent in order
-  const essayTimers = useRef<Record<string, number>>({});
-  const essayPending = useRef<Record<string, string>>({});
+  const pendingAnswers = useRef(new Map(Object.entries(restoredDraft.pending)));
+  const batchTimer = useRef<number | null>(null);
+  const flushInFlight = useRef<Promise<FlushResult> | null>(null);
+  const flushRef = useRef<() => Promise<FlushResult>>(async () => 'saved');
+  const submitRef = useRef<(reason: 'manual' | 'tab_switch' | 'deadline') => Promise<void>>(async () => undefined);
   const sub = useRef(false);
   const reviewPdfRequest = useRef(false);
+  const draftKey = `exam-answer-draft:${st.attemptId ?? ''}`;
+
+  const persistPendingDraft = useCallback(() => {
+    try {
+      if (!st.attemptId) throw new Error('Thiếu mã lượt thi để lưu bản nháp.');
+      const draft = Object.fromEntries(pendingAnswers.current);
+      if (Object.keys(draft).length) window.localStorage.setItem(draftKey, JSON.stringify(draft));
+      else window.localStorage.removeItem(draftKey);
+      setDraftWarning('');
+    } catch (error) {
+      console.error('Không thể lưu bản nháp đáp án trên thiết bị.', error);
+      setDraftWarning('Không lưu được bản nháp trên thiết bị; hãy giữ trang thi mở cho đến khi trạng thái hiển thị “Đã lưu”.');
+    }
+  }, [draftKey, st.attemptId]);
+
+  const scheduleFlush = useCallback((delay = 120000) => {
+    if (sub.current || !pendingAnswers.current.size || batchTimer.current !== null) return;
+    batchTimer.current = window.setTimeout(() => {
+      batchTimer.current = null;
+      void flushRef.current().then((result) => {
+        if (result === 'expired') void submitRef.current('deadline');
+      });
+    }, delay);
+  }, []);
+
+  const flushAnswers = useCallback(async (): Promise<FlushResult> => {
+    if (flushInFlight.current) return flushInFlight.current;
+    const batch = [...pendingAnswers.current.entries()].slice(0, 5);
+    if (!batch.length) return 'saved';
+    if (batchTimer.current !== null) {
+      window.clearTimeout(batchTimer.current);
+      batchTimer.current = null;
+    }
+
+    let retryAutomatically = true;
+    const request = (async (): Promise<FlushResult> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const answers = batch.map(([questionId, answer]) => answer.essay !== null
+            ? { questionId, essay: answer.essay }
+            : { questionId, optionIds: answer.options });
+          await api('exam/answers', { method: 'PUT', body: JSON.stringify({ answers }) });
+          for (const [questionId, answer] of batch) {
+            if (pendingAnswers.current.get(questionId) === answer) pendingAnswers.current.delete(questionId);
+          }
+          persistPendingDraft();
+          setSync(pendingAnswers.current.size ? 'saving' : 'saved');
+          return 'saved';
+        } catch (error) {
+          const status = (error as ApiError).status;
+          if (status === 409) {
+            setSync('error');
+            return 'expired';
+          }
+          if (status && status < 500 && status !== 429) {
+            retryAutomatically = false;
+            break;
+          }
+          if (attempt < 2) await sleep(500 * (attempt + 1));
+        }
+      }
+      setSync('error');
+      return 'error';
+    })();
+
+    flushInFlight.current = request;
+    const result = await request;
+    if (flushInFlight.current === request) flushInFlight.current = null;
+    if (result === 'saved' && pendingAnswers.current.size && !sub.current) {
+      if (pendingAnswers.current.size >= 5) {
+        void flushRef.current().then((nextResult) => {
+          if (nextResult === 'expired') void submitRef.current('deadline');
+        });
+      } else {
+        scheduleFlush();
+      }
+    } else if (result === 'error' && retryAutomatically && !sub.current) {
+      scheduleFlush(5000);
+    }
+    return result;
+  }, [persistPendingDraft, scheduleFlush]);
+  flushRef.current = flushAnswers;
 
   const enableFullscreen = async () => {
     try {
@@ -339,28 +478,31 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     sub.current = true;
     setConfirm(false);
     setMsg(reason === 'tab_switch' ? 'Bạn đã chuyển sang tab khác. Bài đang được nộp tự động…' : 'Đang nộp bài…');
-    await chain.current.catch(() => undefined);
-    for (const [questionId, essay] of Object.entries(essayPending.current)) {
-      window.clearTimeout(essayTimers.current[questionId]);
-      try {
-        await api('exam/answer', { method: 'PUT', body: JSON.stringify({ questionId, essay }) });
-        delete essayPending.current[questionId];
-        delete essayTimers.current[questionId];
-      } catch {
+    if (batchTimer.current !== null) {
+      window.clearTimeout(batchTimer.current);
+      batchTimer.current = null;
+    }
+    while (pendingAnswers.current.size) {
+      const result = await flushAnswers();
+      if (result === 'error') {
         sub.current = false;
-        setMsg('Chưa lưu được bài tự luận do lỗi mạng. Hãy thử nộp lại.');
+        setMsg('Chưa đồng bộ được các đáp án do lỗi mạng. Bài chưa được nộp; hãy kiểm tra kết nối rồi thử lại.');
         return;
       }
+      if (result === 'expired') break;
     }
     for (let k = 0; k < 4; k++) {
       try {
         const r = await api<St>('exam/submit', { method: 'POST', body: JSON.stringify({ reason }), keepalive: true });
+        pendingAnswers.current.clear();
+        persistPendingDraft();
         return onDone(r, reason === 'tab_switch');
       } catch (e) { if ((e as ApiError).status === 401) break; await sleep(800 * (k + 1)); }
     }
     sub.current = false;
     setMsg('Chưa nộp được bài do lỗi mạng. Bấm "Nộp bài" để thử lại.');
-  }, [onDone]);
+  }, [flushAnswers, onDone, persistPendingDraft]);
+  submitRef.current = submit;
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -432,22 +574,39 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     };
   }, [deadline, downloadReviewPdf, submit, tabSwitchProtectionEnabled]);
 
-  function save(q: Q, value: AnswerValue) {
+  useEffect(() => {
+    if (pendingAnswers.current.size) scheduleFlush();
+    const onPageHide = () => {
+      if (pendingAnswers.current.size) void flushRef.current();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      if (batchTimer.current !== null) window.clearTimeout(batchTimer.current);
+      batchTimer.current = null;
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [scheduleFlush]);
+
+  function queueAnswer(q: Q, value: AnswerValue) {
     if (sub.current) return;
-    setAns((a) => ({ ...a, [q.id]: value }));
+    const next = { options: [...value.options], essay: value.essay };
+    setAns((a) => ({ ...a, [q.id]: next }));
+    pendingAnswers.current.set(q.id, next);
+    persistPendingDraft();
     setSync('saving');
-    chain.current = chain.current.then(async () => {
-      for (let k = 0; k < 3; k++) {
-        try {
-          const body = value.essay !== null
-            ? { questionId: q.id, essay: value.essay }
-            : { questionId: q.id, optionIds: value.options };
-          await api('exam/answer', { method: 'PUT', body: JSON.stringify(body) });
-          setSync('saved'); return;
-        }
-        catch (e) { if ((e as ApiError).status === 409) { void submit('deadline'); return; } await sleep(700); }
+    if (pendingAnswers.current.size >= 5) {
+      if (batchTimer.current !== null) {
+        window.clearTimeout(batchTimer.current);
+        batchTimer.current = null;
       }
-      setSync('error');
+      flushPendingAnswers();
+    } else {
+      scheduleFlush();
+    }
+  }
+  function flushPendingAnswers() {
+    void flushRef.current().then((result) => {
+      if (result === 'expired') void submitRef.current('deadline');
     });
   }
   const pick = (q: Q, o: Opt) => {
@@ -455,17 +614,10 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
     const options = q.type === 'multiple'
       ? current.includes(o.id) ? current.filter((id) => id !== o.id) : [...current, o.id]
       : [o.id];
-    save(q, { options, essay: null });
+    queueAnswer(q, { options, essay: null });
   };
   const editEssay = (q: Q, essay: string) => {
-    setAns((a) => ({ ...a, [q.id]: { options: [], essay } }));
-    essayPending.current[q.id] = essay;
-    window.clearTimeout(essayTimers.current[q.id]);
-    essayTimers.current[q.id] = window.setTimeout(() => {
-      delete essayPending.current[q.id];
-      delete essayTimers.current[q.id];
-      save(q, { options: [], essay });
-    }, 500);
+    queueAnswer(q, { options: [], essay });
   };
   const q = qs[i];
   const pointsPerQuestion = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(0.5);
@@ -500,10 +652,11 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
         </div>
         <div>
           <span className={'text-sm ' + (sync === 'error' ? 'text-red-700' : 'text-slate-600')} role="status">
-            {sync === 'saved' ? 'Đã lưu' : sync === 'saving' ? 'Đang lưu…' : 'Lỗi lưu, đang thử lại'}
+            {sync === 'saved' ? 'Đã lưu' : sync === 'saving' ? 'Đang lưu…' : 'Lỗi lưu, đáp án đang chờ đồng bộ'}
           </span>
         </div>
       </div>
+      {draftWarning && <p role="alert" className="mb-4 rounded-md bg-amber-100 px-4 py-3 text-amber-900">{draftWarning}</p>}
       {fullscreenNotice && (
         <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           <span>{fullscreenNotice}</span>
@@ -538,15 +691,6 @@ function Exam({ st, onDone, fullscreenWarning }: { st: St; onDone: (state: St, t
               <span className="sr-only">Câu trả lời tự luận</span>
               <textarea rows={8} maxLength={10000} value={ans[q.id]?.essay ?? ''}
                 onChange={(e) => editEssay(q, e.target.value)}
-                onBlur={() => {
-                  if (q.id in essayPending.current) {
-                    window.clearTimeout(essayTimers.current[q.id]);
-                    delete essayTimers.current[q.id];
-                    const essay = essayPending.current[q.id];
-                    delete essayPending.current[q.id];
-                    save(q, { options: [], essay });
-                  }
-                }}
                 className="w-full rounded-md border border-slate-300 p-3 focus:border-[#299D8F] focus:outline-none focus:ring-2 focus:ring-[#EDF6F4]" placeholder="Nhập câu trả lời..." />
             </label>
           ) : (

@@ -4,5 +4,6 @@ dist
 !.env.example
 .vercel
 loadtest/codes.json
+loadtest/participants.local.txt
 
 .vercel

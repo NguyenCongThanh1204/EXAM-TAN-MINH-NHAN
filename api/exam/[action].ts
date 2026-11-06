@@ -17,6 +17,9 @@ const Answer = z.object({
   optionIds: z.array(z.string().min(1).max(32)).max(6).optional(),
   essay: z.string().max(10000).optional(),
 }).refine((v) => (v.optionIds !== undefined) !== (v.essay !== undefined));
+const AnswersBatch = z.object({
+  answers: z.array(Answer).min(1).max(5),
+}).refine((v) => new Set(v.answers.map((answer) => answer.questionId)).size === v.answers.length);
 const Submit = z.object({ reason: z.enum(['manual', 'tab_switch', 'deadline']) });
 const ERR: Record<string, [number, string]> = {
   not_open: [403, 'Kỳ thi chưa mở.'], closed: [403, 'Kỳ thi đã đóng.'],
@@ -36,10 +39,10 @@ async function attemptId(req: VercelRequest): Promise<string | null> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const rid = begin(req, res);
+  const action = String(req.query.action);
+  const rid = begin(req, res, action === 'answers' ? 64 * 1024 : 16_384);
   if (!rid) return;
   try {
-    const action = String(req.query.action);
     const A = ip(req);
 
     if (action === 'info' && req.method === 'GET') {
@@ -134,11 +137,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'state' && req.method === 'GET') {
       const { data, error } = await sb.rpc('attempt_state', { p_attempt: id });
       if (error) throw error;
+      const state = data ? { ...data, attemptId: id } : data;
       if (data?.status === 'in_progress') {
         const { data: s } = await sb.from('exam_settings').select('display_mode').eq('id', 1).single();
-        return res.json({ ...data, displayMode: s?.display_mode === 'all' ? 'all' : 'paged' });
+        return res.json({ ...state, displayMode: s?.display_mode === 'all' ? 'all' : 'paged' });
       }
-      return res.json(data);
+      return res.json(state);
+    }
+
+    if (action === 'answers' && req.method === 'PUT') {
+      if (await limited('ans:' + id, 120, 60)) return res.status(429).json({ error: 'Quá nhiều yêu cầu.' });
+      const p = AnswersBatch.safeParse(req.body);
+      if (!p.success) return res.status(400).json({ error: 'Danh sách đáp án không hợp lệ.' });
+      const { data, error } = await sb.rpc('save_answers', {
+        p_attempt: id,
+        p_answers: p.data.answers,
+      });
+      if (error) {
+        if (error.message.includes('invalid_answers')) return res.status(400).json({ error: 'Một hoặc nhiều đáp án không hợp lệ.' });
+        throw error;
+      }
+      if (data === 'ok') return res.json({ ok: true });
+      if (data === 'invalid') return res.status(400).json({ error: 'Một hoặc nhiều đáp án không hợp lệ.' });
+      if (data === 'not_found') return res.status(404).json({ error: 'Không tìm thấy bài thi.' });
+      return res.status(409).json({ error: 'expired' });
     }
 
     if (action === 'answer' && req.method === 'PUT') {
